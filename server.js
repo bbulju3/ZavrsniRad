@@ -11,14 +11,14 @@ app.use(cors());
 app.use(express.json());
 
 // [READ] - korisnici
-app.get('/api/korisnici', async (req, res) => {
+app.get('/api/Korisnici', async (req, res) => {
     try {       
     const [rows] = await db.query('SELECT * FROM Korisnici');        
     res.status(200).json(rows);
 } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri dohvaćanju korisnika' }); }
 });
 // [CREATE] - korisnik
-app.post('/api/korisnici', async (req, res) => {    
+app.post('/api/Korisnici', async (req, res) => {    
     const { ime, prezime, email, lozinka_hash } = req.body;
     try {       
         const [result] = await db.query('INSERT INTO Korisnici (ime, prezime, email, lozinka_hash) VALUES (?, ?, ?, ?)', [ime, prezime, email, lozinka_hash]);      
@@ -26,7 +26,7 @@ app.post('/api/korisnici', async (req, res) => {   
     } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri kreiranju korisnika' }); }
 });
 // [UPDATE] - korisnik
-app.put('/api/korisnici/:id', async (req, res) => {    
+app.put('/api/Korisnici/:id', async (req, res) => {    
     const { id } = req.params;
     const { ime, prezime, email, lozinka_hash } = req.body;
     try {      
@@ -35,7 +35,7 @@ app.put('/api/korisnici/:id', async (req, res) => {   
     } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri ažuriranju korisnika' }); }
 });
 // [DELETE] - korisnik
-app.delete('/api/korisnici/:id', async (req, res) => {
+app.delete('/api/Korisnici/:id', async (req, res) => {
     const { id } = req.params;
     try {      
     await db.query('DELETE FROM Korisnici WHERE id = ?', [id]);
