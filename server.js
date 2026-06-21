@@ -1,0 +1,180 @@
+const express = require('express');
+
+const cors = require('cors');
+
+const db = require('./db');
+
+const app = express();
+
+app.use(cors());
+
+app.use(express.json());
+
+// [READ] - korisnici
+app.get('/api/korisnici', async (req, res) => {
+    try {       
+    const [rows] = await db.query('SELECT * FROM Korisnici');        
+    res.status(200).json(rows);
+} catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri dohvaćanju korisnika' }); }
+});
+// [CREATE] - korisnik
+app.post('/api/korisnici', async (req, res) => {    
+    const { ime, prezime, email, lozinka_hash } = req.body;
+    try {       
+        const [result] = await db.query('INSERT INTO Korisnici (ime, prezime, email, lozinka_hash) VALUES (?, ?, ?, ?)', [ime, prezime, email, lozinka_hash]);      
+        res.status(201).json({ poruka: 'Korisnik uspješno kreiran', id: result.insertId });
+    } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri kreiranju korisnika' }); }
+});
+// [UPDATE] - korisnik
+app.put('/api/korisnici/:id', async (req, res) => {    
+    const { id } = req.params;
+    const { ime, prezime, email, lozinka_hash } = req.body;
+    try {      
+        await db.query('UPDATE Korisnici SET ime = ?, prezime = ?, email = ?, lozinka_hash = ? WHERE id = ?', [ime, prezime, email, lozinka_hash, id]);
+        res.status(200).json({ poruka: 'Korisnički podaci uspješno ažurirani' });
+    } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri ažuriranju korisnika' }); }
+});
+// [DELETE] - korisnik
+app.delete('/api/korisnici/:id', async (req, res) => {
+    const { id } = req.params;
+    try {      
+    await db.query('DELETE FROM Korisnici WHERE id = ?', [id]);
+    res.status(200).json({ poruka: 'Korisnik uspješno obrisan' });
+} catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri brisanju korisnika. Provjerite vanjske ključeve.' }); }
+});
+
+// [READ] - administratori
+app.get('/api/administratori', async (req, res) => {
+    try {
+    const [rows] = await db.query('SELECT * FROM Administratori');
+    res.status(200).json(rows);
+} catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri dohvaćanju administratora' }); }
+});
+// [CREATE] - administrator
+app.post('/api/administratori', async (req, res) => {
+    const { ime, prezime, email, lozinka_hash } = req.body;
+    try {
+        const [result] = await db.query('INSERT INTO Administratori (ime, prezime, email, lozinka_hash) VALUES (?, ?, ?, ?)', [ime, prezime, email, lozinka_hash]);
+        res.status(201).json({ poruka: 'Administrator uspješno kreiran', id: result.insertId });
+    } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri kreiranju administratora' }); }
+});
+// [UPDATE] - administrator
+app.put('/api/administratori/:id', async (req, res) => {
+    const { id } = req.params;
+    const { ime, prezime, email, lozinka_hash } = req.body;
+    try {
+        await db.query('UPDATE Administratori SET ime = ?, prezime = ?, email = ?, lozinka_hash = ? WHERE id = ?', [ime, prezime, email, lozinka_hash, id]);
+        res.status(200).json({ poruka: 'Administratorski podaci uspješno ažurirani' });
+    } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri ažuriranju administratora' }); }
+});
+// [DELETE] - administrator
+app.delete('/api/administratori/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        await db.query('DELETE FROM Administratori WHERE id = ?', [id]);
+        res.status(200).json({ poruka: 'Administrator uspješno obrisan' });
+    } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri brisanju administratora' }); }
+});
+
+// [READ] - resursi
+app.get('/api/resursi', async (req, res) => {
+    try {
+    const [rows] = await db.query('SELECT * FROM Resursi');
+    res.status(200).json(rows);
+} catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri dohvaćanju resursa' }); }
+});
+// [CREATE] - resurs
+app.post('/api/resursi', async (req, res) => {
+    const { naziv, tip, opis, kapacitet, status } = req.body;
+    try {
+        const [result] = await db.query('INSERT INTO Resursi (naziv, tip, opis, kapacitet, status) VALUES (?, ?, ?, ?, ?)', [naziv, tip, opis, kapacitet, status]);
+        res.status(201).json({ poruka: 'Resurs uspješno kreiran', id: result.insertId });
+    } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri kreiranju resursa' }); }
+});
+// [UPDATE] - resurs
+app.put('/api/resursi/:id', async (req, res) => {
+    const { id } = req.params;
+    const { naziv, tip, opis, kapacitet, status } = req.body;
+    try {
+        await db.query('UPDATE Resursi SET naziv = ?, tip = ?, opis = ?, kapacitet = ?, status = ? WHERE id = ?', [naziv, tip, opis, kapacitet, status, id]);
+        res.status(200).json({ poruka: 'Resurs uspješno ažuriran' });
+    } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri ažuriranju resursa' }); }
+});
+// [DELETE] - resurs
+app.delete('/api/resursi/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        await db.query('DELETE FROM Resursi WHERE id = ?', [id]);
+        res.status(200).json({ poruka: 'Resurs uspješno obrisan' });
+    } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri brisanju resursa. Provjerite postoje li povezane rezervacije.' }); }
+});
+
+// [READ] - zabrane
+app.get('/api/zabrane', async (req, res) => {
+    try {
+    const [rows] = await db.query('SELECT * FROM Zabrane_Pristupa');
+    res.status(200).json(rows);
+} catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri dohvaćanju zabrana' }); }
+});
+// [CREATE] - zabrana
+app.post('/api/zabrane', async (req, res) => {
+    const { korisnik_id, administrator_id, resurs_id, tip_resursa, razlog, aktivna } = req.body;
+    try {
+        const [result] = await db.query('INSERT INTO Zabrane_Pristupa (korisnik_id, administrator_id, resurs_id, tip_resursa, razlog, aktivna) VALUES (?, ?, ?, ?, ?, ?)', [korisnik_id, administrator_id, resurs_id, tip_resursa, razlog, aktivna || true]);
+        res.status(201).json({ poruka: 'Zabrana uspješno kreirana', id: result.insertId });
+    } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri kreiranju zabrane' }); }
+});
+// [UPDATE] - zabrana
+app.put('/api/zabrane/:id', async (req, res) => {
+    const { id } = req.params;
+    const { korisnik_id, administrator_id, resurs_id, tip_resursa, razlog, aktivna } = req.body;
+    try {
+        await db.query('UPDATE Zabrane_Pristupa SET korisnik_id = ?, administrator_id = ?, resurs_id = ?, tip_resursa = ?, razlog = ?, aktivna = ? WHERE id = ?', [korisnik_id, administrator_id, resurs_id, tip_resursa, razlog, aktivna, id]);
+        res.status(200).json({ poruka: 'Zabrana pristupa uspješno ažurirana' });
+    } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri ažuriranju zabrane' }); }
+});
+// [DELETE] - zabrana
+app.delete('/api/zabrane/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        await db.query('DELETE FROM Zabrane_Pristupa WHERE id = ?', [id]);
+        res.status(200).json({ poruka: 'Zabrana uspješno obrisana iz baze' });
+    } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri brisanju zabrane' }); }
+});
+
+// [READ] - rezervacije
+app.get('/api/rezervacije', async (req, res) => {
+    try {
+        const [rows] = await db.query('SELECT * FROM Rezervacije');
+        res.status(200).json(rows);
+    } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri dohvaćanju rezervacija' }); }
+});
+// [CREATE] - rezervacija
+app.post('/api/rezervacije', async (req, res) => {
+    const { korisnik_id, resurs_id, vrijeme_pocetka, vrijeme_zavrsetka, status, napomena_admina } = req.body;
+    try {
+        const [result] = await db.query('INSERT INTO Rezervacije (korisnik_id, resurs_id, vrijeme_pocetka, vrijeme_zavrsetka, status, napomena_admina) VALUES (?, ?, ?, ?, ?, ?)', [korisnik_id, resurs_id, vrijeme_pocetka, vrijeme_zavrsetka, status || 'aktivna', napomena_admina || null]);
+        res.status(201).json({ poruka: 'Rezervacija uspješno kreirana', id: result.insertId });
+    } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri kreiranju rezervacije' }); }
+});
+// [UPDATE] - rezervacija
+app.put('/api/rezervacije/:id', async (req, res) => {
+    const { id } = req.params;
+    const { korisnik_id, resurs_id, vrijeme_pocetka, vrijeme_zavrsetka, status, napomena_admina } = req.body;
+    try {
+        await db.query('UPDATE Rezervacije SET korisnik_id = ?, resurs_id = ?, vrijeme_pocetka = ?, vrijeme_zavrsetka = ?, status = ?, napomena_admina = ? WHERE id = ?', [korisnik_id, resurs_id, vrijeme_pocetka, vrijeme_zavrsetka, status, napomena_admina, id]);
+        res.status(200).json({ poruka: 'Rezervacija uspješno izmijenjena' });
+    } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri izmjeni rezervacije' }); }
+});
+// [DELETE] - rezervacija
+app.delete('/api/rezervacije/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        await db.query('DELETE FROM Rezervacije WHERE id = ?', [id]);
+        res.status(200).json({ poruka: 'Rezervacija uspješno obrisana' });
+    } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri brisanju rezervacije' }); }
+});
+
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => { console.log(` REST API server uspješno pokrenut na portu ${PORT}`); });
