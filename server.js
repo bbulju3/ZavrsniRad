@@ -177,6 +177,19 @@ app.delete('/api/rezervacije/:id', async (req, res) => {
 
 app.get('/', (req, res) => { res.status(200).json({ poruka: 'REST API server je uspješno pokrenut!' }); });
 
+app.get('/api', (req, res) => {
+    res.status(200).json({
+        poruka: 'Dobrodošli u glavni API direktorij za rezervaciju resursa',
+        dostupne_rute: {
+            korisnici: '/api/korisnici',
+            administratori: '/api/administratori',
+            resursi: '/api/resursi',
+            zabrane: '/api/zabrane',
+            rezervacije: '/api/rezervacije'
+        }
+    });
+});
+
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => { console.log(` REST API server uspješno pokrenut na portu ${PORT}`); });
