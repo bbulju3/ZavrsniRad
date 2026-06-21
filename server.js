@@ -178,3 +178,5 @@ app.delete('/api/rezervacije/:id', async (req, res) => {
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => { console.log(` REST API server uspješno pokrenut na portu ${PORT}`); });
+
+module.exports = app;
