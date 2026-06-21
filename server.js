@@ -175,7 +175,9 @@ app.delete('/api/rezervacije/:id', async (req, res) => {
     } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri brisanju rezervacije' }); }
 });
 
-const PORT = process.env.PORT || 3000;
+app.get('/', (req, res) => { res.send('REST API server je uspješno pokrenut!'); });)
+
+const PORT = process.env.PORT //|| 3000;
 
 app.listen(PORT, () => { console.log(` REST API server uspješno pokrenut na portu ${PORT}`); });
 
