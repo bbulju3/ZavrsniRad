@@ -131,8 +131,8 @@ app.post('/api/auth/rezervacije', authMiddleWare, async (req, res) => {
 
         // --- 3. IZVRŠAVANJE: Ako su sve provjere prošle, upisujemo rezervaciju ---
         const [result] = await db.query(
-            'INSERT INTO Rezervacije (korisnik_id, resurs_id, vrijeme_pocetka, vrijeme_zavrsetka, status) VALUES (?, ?, ?, ?, "aktivna")',
-            [korisnik_id, resurs_id, vrijeme_pocetka, vrijeme_zavrsetka]
+            'INSERT INTO Rezervacije (korisnik_id, resurs_id, vrijeme_pocetka, vrijeme_zavrsetka, status) VALUES (?, ?, ?, ?, ?)',
+            [korisnik_id, resurs_id, vrijeme_pocetka, vrijeme_zavrsetka, 'aktivna']
         );
 
         res.status(201).json({
