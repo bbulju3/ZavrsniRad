@@ -6,9 +6,83 @@ const db = require('./db');
 
 const app = express();
 
+const bcrypt = require('bcryptjs');
+
+const jwt = require('jsonwebtoken');
+
+const authMidW = require('./authMidW');
+
 app.use(cors());
 
 app.use(express.json());
+
+app.post('/api/auth/register', async (req, res) => {
+    const { ime, prezime, email, lozinka } = req.body;
+
+    if (!ime || !prezime || !email || !lozinka) {
+        return res.status(400).json({ greska: 'Sva polja su obavezna.' });
+    }
+
+    try {
+        const [postojiKorisnik] = await db.query('SELECT id FROM Korisnici WHERE email = ?', [email]);
+        if (postojiKorisnik.length > 0) {
+            return res.status(400).json({ greska: 'Korisnik s ovim emailom već postoji.' });
+        }
+
+        const sol = await bcrypt.genSalt(10);
+        const hashiranaLozinka = await bcrypt.hash(lozinka, sol);
+
+        const [result] = await db.query(
+            'INSERT INTO Korisnici (ime, prezime, email, lozinka_hash) VALUES (?, ?, ?, ?)',
+            [ime, prezime, email, hashiranaLozinka]
+        );
+
+        res.status(201).json({ poruka: 'Korisnik uspješno registriran!', korisnikId: result.insertId });
+    } catch (error) {
+        res.status(500).json({ greska: 'Greška prilikom registracije.', detalji: error.message });
+    }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+    const { email, lozinka } = req.body;
+
+    if (!email || !lozinka) {
+        return res.status(400).json({ greska: 'Email i lozinka su obavezni.' });
+    }
+
+    try {
+        const [rows] = await db.query('SELECT * FROM Korisnici WHERE email = ?', [email]);
+        if (rows.length === 0) {
+            return res.status(401).json({ greska: 'Pogrešan email ili lozinka.' });
+        }
+
+        const korisnik = rows[0];
+
+        const lozinkaJeTocna = await bcrypt.compare(lozinka, korisnik.lozinka_hash);
+        if (!lozinkaJeTocna) {
+            return res.status(401).json({ greska: 'Pogrešan email ili lozinka.' });
+        }
+
+        const token = jwt.sign(
+            { id: korisnik.id, email: korisnik.email, uloga: 'korisnik' },
+            process.env.JWT_SECRET,
+            { expiresIn: '24h' }
+        );
+
+        res.status(200).json({
+            poruka: 'Prijava uspješna!',
+            token: token,
+            korisnik: {
+                id: korisnik.id,
+                ime: korisnik.ime,
+                prezime: korisnik.prezime,
+                email: korisnik.email
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ greska: 'Greška prilikom prijave.', detalji: error.message });
+    }
+});
 
 // [READ] - korisnici
 app.get('/api/korisnici', async (req, res) => {
