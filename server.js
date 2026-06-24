@@ -88,7 +88,7 @@ app.post('/api/auth/login', async (req, res) => {
 
 // KREIRANJE NOVE REZERVACIJE (S VALIDACIJOM PREKLAPANJA I ZABRANA)
 // Primijeti dodan authMiddleware kao drugi parametar rute
-app.post('/api/auth/rezervacije', authMiddleware, async (req, res) => {
+app.post('/api/auth/rezervacije', authMidW, async (req, res) => {
     const { resurs_id, vrijeme_pocetka, vrijeme_zavrsetka } = req.body;
 
     // ID korisnika automatski izvlačimo iz JWT tokena (postavio ga je authMiddleware)
