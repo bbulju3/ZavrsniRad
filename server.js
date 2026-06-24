@@ -10,7 +10,7 @@ const bcrypt = require('bcryptjs');
 
 const jwt = require('jsonwebtoken');
 
-const authMidW = require('./authMidW');
+const authMiddleWare = require('./authMidW');
 
 app.use(cors());
 
@@ -88,7 +88,7 @@ app.post('/api/auth/login', async (req, res) => {
 
 // KREIRANJE NOVE REZERVACIJE (S VALIDACIJOM PREKLAPANJA I ZABRANA)
 // Primijeti dodan authMiddleware kao drugi parametar rute
-app.post('/api/auth/rezervacije', authMidW, async (req, res) => {
+app.post('/api/auth/rezervacije', authMiddleWare, async (req, res) => {
     const { resurs_id, vrijeme_pocetka, vrijeme_zavrsetka } = req.body;
 
     // ID korisnika automatski izvlačimo iz JWT tokena (postavio ga je authMiddleware)
