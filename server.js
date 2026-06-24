@@ -84,6 +84,67 @@ app.post('/api/auth/login', async (req, res) => {
     }
 });
 
+// Authorized [CREATE] - rezervacija
+
+// KREIRANJE NOVE REZERVACIJE (S VALIDACIJOM PREKLAPANJA I ZABRANA)
+// Primijeti dodan authMiddleware kao drugi parametar rute
+app.post('/api/auth/rezervacije', authMiddleware, async (req, res) => {
+    const { resurs_id, vrijeme_pocetka, vrijeme_zavrsetka } = req.body;
+
+    // ID korisnika automatski izvlačimo iz JWT tokena (postavio ga je authMiddleware)
+    const korisnik_id = req.user.id;
+
+    if (!resurs_id || !vrijeme_pocetka || !vrijeme_zavrsetka) {
+        return res.status(400).json({ greska: 'Sva polja (resurs_id, vrijeme_pocetka, vrijeme_zavrsetka) su obavezna.' });
+    }
+
+    try {
+        // --- 1. VALIDACIJA: Provjera ima li korisnik aktivnu zabranu pristupa ---
+        const [zabrane] = await db.query(
+            'SELECT id, razlog FROM Zabrane_Pristupa WHERE korisnik_id = ? AND aktivna = true',
+            [korisnik_id]
+        );
+        if (zabrane.length > 0) {
+            return res.status(403).json({
+                greska: 'Rezervacija odbijena. Imate aktivnu zabranu pristupa sustavu!',
+                razlog: zabrane[0].razlog
+            });
+        }
+
+        // --- 2. VALIDACIJA: SQL algoritam za preklapanje termina (Double-booking prevention) ---
+        const sqlProvjeraPreklapanja = `
+            SELECT id FROM Rezervacije 
+            WHERE resurs_id = ? 
+              AND status = 'aktivna'
+              AND vrijeme_pocetka < ? 
+              AND vrijeme_zavrsetka > ?
+        `;
+
+        // Šaljemo parametre: resurs_id, novi_zavrsetak, novi_pocetak
+        const [preklapanja] = await db.query(sqlProvjeraPreklapanja, [resurs_id, vrijeme_zavrsetka, vrijeme_pocetka]);
+
+        if (preklapanja.length > 0) {
+            return res.status(409).json({
+                greska: 'Termin je zauzet. Odabrani resurs je već rezerviran u navedenom vremenu.'
+            });
+        }
+
+        // --- 3. IZVRŠAVANJE: Ako su sve provjere prošle, upisujemo rezervaciju ---
+        const [result] = await db.query(
+            'INSERT INTO Rezervacije (korisnik_id, resurs_id, vrijeme_pocetka, vrijeme_zavrsetka, status) VALUES (?, ?, ?, ?, "aktivna")',
+            [korisnik_id, resurs_id, vrijeme_pocetka, vrijeme_zavrsetka]
+        );
+
+        res.status(201).json({
+            poruka: 'Rezervacija uspješno kreirana!',
+            rezervacijaId: result.insertId
+        });
+
+    } catch (error) {
+        res.status(500).json({ greska: 'Greška prilikom kreiranja rezervacije.', detalji: error.message });
+    }
+});
+
 // [READ] - korisnici
 app.get('/api/korisnici', async (req, res) => {
     try {       
