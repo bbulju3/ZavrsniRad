@@ -12,6 +12,8 @@ const jwt = require('jsonwebtoken');
 
 const authMiddleWare = require('./authMidW');
 
+const adminMiddleware = require('./adminMidW');
+
 app.use(cors());
 
 app.use(express.json());
@@ -42,6 +44,8 @@ app.post('/api/auth/register', async (req, res) => {
         res.status(500).json({ greska: 'Greška prilikom registracije.', detalji: error.message });
     }
 });
+
+//Korisnicki login i token
 
 app.post('/api/auth/login', async (req, res) => {
     const { email, lozinka } = req.body;
@@ -84,10 +88,51 @@ app.post('/api/auth/login', async (req, res) => {
     }
 });
 
+//Admin login i token
+
+app.post('/api/auth/admin-login', async (req, res) => {
+    const { email, lozinka } = req.body;
+
+    if (!email || !lozinka) {
+        return res.status(400).json({ greska: 'Email i lozinka su obavezni.' });
+    }
+
+    try {
+        const [rows] = await db.query('SELECT * FROM Administratori WHERE email = ?', [email]);
+        if (rows.length === 0) {
+            return res.status(401).json({ greska: 'Pogrešan email ili lozinka.' });
+        }
+
+        const admin = rows[0];
+
+        const lozinkaJeTocna = await bcrypt.compare(lozinka, admin.lozinka_hash);
+        if (!lozinkaJeTocna) {
+            return res.status(401).json({ greska: 'Pogrešan email ili lozinka.' });
+        }
+
+        const token = jwt.sign(
+            { id: admin.id, email: admin.email, uloga: 'admin' },
+            process.env.JWT_SECRET,
+            { expiresIn: '24h' }
+        );
+
+        res.status(200).json({
+            poruka: 'Admin prijava uspješna!',
+            token: token,
+            admin: {
+                id: admin.id,
+                ime: admin.ime,
+                prezime: admin.prezime,
+                email: admin.email
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ greska: 'Greška prilikom prijave administratora.', detalji: error.message });
+    }
+});
+
 // Authorized [CREATE] - rezervacija
 
-// KREIRANJE NOVE REZERVACIJE (S VALIDACIJOM PREKLAPANJA I ZABRANA)
-// Primijeti dodan authMiddleware kao drugi parametar rute
 app.post('/api/auth/rezervacije', authMiddleWare, async (req, res) => {
     const { resurs_id, vrijeme_pocetka, vrijeme_zavrsetka } = req.body;
 

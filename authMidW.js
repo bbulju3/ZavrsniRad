@@ -1,10 +1,8 @@
 const jwt = require('jsonwebtoken');
 
 module.exports = (req, res, next) => {
-    // Dohvaćamo token iz Authorization zaglavlja (Header)
     const authHeader = req.headers['authorization'];
 
-    // Token dolazi u formatu: "Bearer KOD_TOKENA", pa ga splitamo po razmaku
     const token = authHeader && authHeader.split(' ')[1];
 
     if (!token) {
