@@ -91,9 +91,9 @@ app.post('/api/auth/login', async (req, res) => {
 //Admin login i token
 
 app.post('/api/auth/admin-login', async (req, res) => {
-    const { email, lozinka } = req.body;
+    const { email, lozinka_hash } = req.body;
 
-    if (!email || !lozinka) {
+    if (!email || !lozinka_hash) {
         return res.status(400).json({ greska: 'Email i lozinka su obavezni.' });
     }
 
@@ -105,7 +105,7 @@ app.post('/api/auth/admin-login', async (req, res) => {
 
         const admin = rows[0];
 
-        const lozinkaJeTocna = await bcrypt.compare(lozinka, admin.lozinka_hash);
+        const lozinkaJeTocna = await bcrypt.compare(lozinka_hash, admin.lozinka_hash);
         if (!lozinkaJeTocna) {
             return res.status(401).json({ greska: 'Pogrešan email ili lozinka.' });
         }
