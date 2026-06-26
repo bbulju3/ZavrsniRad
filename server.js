@@ -238,6 +238,26 @@ app.post('/api/auth/rezervacije', authMiddleWare, async (req, res) => {
     }
 });
 
+// Authorized [READ] - dohvat svih vlastitih rezervacija korisnika
+app.get('/api/auth/korisnik/moje-rezervacije', authMiddleWare, async (req, res) => {
+    const korisnik_id = req.user.id; // Izravno i sigurno preuzimanje ID-a iz tokena
+
+    try {
+        // Dohvaćamo sve rezervacije za tog korisnika, sortirane tako da su najnovije prve
+        const [mojeRezervacije] = await db.query(
+            'SELECT * FROM Rezervacije WHERE korisnik_id = ? ORDER BY id DESC',
+            [korisnik_id]
+        );
+
+        res.status(200).json(mojeRezervacije);
+    } catch (error) {
+        res.status(500).json({
+            greska: 'Greška prilikom dohvaćanja vaših rezervacija.',
+            detalji: error.message
+        });
+    }
+});
+
 // Authorized [UPDATE] - rezervacija (promjena termina ili otkazivanje)
 app.put('/api/auth/rezervacije/:id', authMiddleWare, async (req, res) => {
     const { id } = req.params; // ID rezervacije koju mijenjamo
