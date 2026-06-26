@@ -131,6 +131,45 @@ app.post('/api/auth/admin-login', async (req, res) => {
     }
 });
 
+// Authorized [UPDATE] - ažuriranje vlastitog korisničkog profila
+app.put('/api/auth/korisnik/profil', authMiddleWare, async (req, res) => {
+    const korisnik_id = req.user.id; // Sigurno preuzimanje ID-a iz tokena
+    const { ime, prezime, email, lozinka } = req.body;
+
+    if (!ime || !prezime || !email) {
+        return res.status(400).json({ greska: 'Polja ime, prezime i email su obavezna.' });
+    }
+
+    try {
+        // Provjera da korisnik ne pokuša promijeniti email u neki koji već koristi drugi korisnik
+        const [postojiEmail] = await db.query('SELECT id FROM Korisnici WHERE email = ? AND id != ?', [email, korisnik_id]);
+        if (postojiEmail.length > 0) {
+            return res.status(400).json({ greska: 'Uneseni email je već u upotrebi od strane drugog korisnika.' });
+        }
+
+        if (lozinka) {
+            // Ako je korisnik unio i novu lozinku, hashiramo je
+            const sol = await bcrypt.genSalt(10);
+            const hashiranaLozinka = await bcrypt.hash(lozinka, sol);
+
+            await db.query(
+                'UPDATE Korisnici SET ime = ?, prezime = ?, email = ?, lozinka_hash = ? WHERE id = ?',
+                [ime, prezime, email, hashiranaLozinka, korisnik_id]
+            );
+        } else {
+            // Ako se lozinka ne mijenja, ažuriramo samo osnovne podatke
+            await db.query(
+                'UPDATE Korisnici SET ime = ?, prezime = ?, email = ? WHERE id = ?',
+                [ime, prezime, email, korisnik_id]
+            );
+        }
+
+        res.status(200).json({ poruka: 'Korisnički profil uspješno ažuriran!' });
+    } catch (error) {
+        res.status(500).json({ greska: 'Greška prilikom ažuriranja profila.', detalji: error.message });
+    }
+});
+
 // Authorized [CREATE] - rezervacija
 
 app.post('/api/auth/rezervacije', authMiddleWare, async (req, res) => {
@@ -144,14 +183,23 @@ app.post('/api/auth/rezervacije', authMiddleWare, async (req, res) => {
     }
 
     try {
+
+        const [resursInfo] = await db.query('SELECT tip FROM Resursi WHERE id = ?', [resurs_id]);
+
+        if (resursInfo.length === 0) {
+            return res.status(404).json({ greska: 'Traženi resurs ne postoji u bazi.' });
+        }
+
+        const tip_resursa = resursInfo[0].tip;
+
         // --- 1. VALIDACIJA: Provjera ima li korisnik aktivnu zabranu pristupa ---
         const [zabrane] = await db.query(
-            'SELECT id, razlog FROM Zabrane_Pristupa WHERE korisnik_id = ? AND aktivna = true',
-            [korisnik_id]
+            'SELECT id, razlog FROM Zabrane_Pristupa WHERE korisnik_id = ? AND aktivna = true AND (resurs_id = ? OR tip_resursa = ?)',
+            [korisnik_id, resurs_id, tip_resursa]
         );
         if (zabrane.length > 0) {
             return res.status(403).json({
-                greska: 'Rezervacija odbijena. Imate aktivnu zabranu pristupa sustavu!',
+                greska: 'Rezervacija odbijena. Imate aktivnu zabranu pristupa za ovaj resurs ili tip resursa!',
                 razlog: zabrane[0].razlog
             });
         }
@@ -187,6 +235,157 @@ app.post('/api/auth/rezervacije', authMiddleWare, async (req, res) => {
 
     } catch (error) {
         res.status(500).json({ greska: 'Greška prilikom kreiranja rezervacije.', detalji: error.message });
+    }
+});
+
+// Authorized [UPDATE] - rezervacija (promjena termina ili otkazivanje)
+app.put('/api/auth/rezervacije/:id', authMiddleWare, async (req, res) => {
+    const { id } = req.params; // ID rezervacije koju mijenjamo
+    const { vrijeme_pocetka, vrijeme_zavrsetka, status } = req.body;
+    const korisnik_id = req.user.id; // Izvlačimo iz tokena radi sigurnosti
+
+    if (!vrijeme_pocetka || !vrijeme_zavrsetka || !status) {
+        return res.status(400).json({ greska: 'Sva polja (vrijeme_pocetka, vrijeme_zavrsetka, status) su obavezna.' });
+    }
+
+    try {
+        // Prvo provjeravamo postoji li rezervacija i pripada li stvarno tom korisniku
+        const [provjeraVlasnistva] = await db.query(
+            'SELECT resurs_id FROM Rezervacije WHERE id = ? AND korisnik_id = ?',
+            [id, korisnik_id]
+        );
+
+        if (provjeraVlasnistva.length === 0) {
+            return res.status(404).json({ greska: 'Rezervacija nije pronađena ili nemate ovlasti za njezinu izmjenu.' });
+        }
+
+        const resurs_id = provjeraVlasnistva[0].resurs_id;
+
+        const [resursInfo] = await db.query('SELECT tip FROM Resursi WHERE id = ?', [resurs_id]);
+
+        if (resursInfo.length === 0) {
+            return res.status(404).json({ greska: 'Traženi resurs ne postoji u bazi.' });
+        }
+
+        const tip_resursa = resursInfo[0].tip;
+
+        // --- 1. VALIDACIJA: Provjera ima li korisnik aktivnu zabranu pristupa (isto kao u CREATE) ---
+        const [zabrane] = await db.query(
+            'SELECT id, razlog FROM Zabrane_Pristupa WHERE korisnik_id = ? AND aktivna = true AND (resurs_id = ? OR tip_resursa = ?)',
+            [korisnik_id, resurs_id, tip_resursa]
+        );
+        if (zabrane.length > 0) {
+            return res.status(403).json({
+                greska: 'Izmjena odbijena. Imate aktivnu zabranu pristupa za ovaj resurs ili tip resursa!',
+                razlog: zabrane[0].razlog
+            });
+        }
+
+        // --- 2. VALIDACIJA: Provjera preklapanja termina (samo ako se postavlja/ostavlja status 'aktivna') ---
+        if (status === 'aktivna') {
+            const sqlProvjeraPreklapanja = `
+                SELECT id FROM Rezervacije 
+                WHERE resurs_id = ? 
+                  AND status = 'aktivna'
+                  AND id != ?
+                  AND vrijeme_pocetka < ? 
+                  AND vrijeme_zavrsetka > ?
+            `;
+
+            // Proslijeđujemo resurs_id, id trenutne rezervacije (da preskoči samu sebe), zavrsetak i pocetak
+            const [preklapanja] = await db.query(sqlProvjeraPreklapanja, [resurs_id, id, vrijeme_zavrsetka, vrijeme_pocetka]);
+
+            if (preklapanja.length > 0) {
+                return res.status(409).json({
+                    greska: 'Termin je zauzet. Odabrani resurs je već rezerviran u navedenom vremenu.'
+                });
+            }
+        }
+
+        // --- 3. IZVRŠAVANJE: Ažuriranje podataka u bazi ---
+        await db.query(
+            'UPDATE Rezervacije SET vrijeme_pocetka = ?, vrijeme_zavrsetka = ?, status = ? WHERE id = ? AND korisnik_id = ?',
+            [vrijeme_pocetka, vrijeme_zavrsetka, status, id, korisnik_id]
+        );
+
+        res.status(200).json({ poruka: 'Rezervacija uspješno ažurirana!' });
+
+    } catch (error) {
+        res.status(500).json({ greska: 'Greška prilikom ažuriranja rezervacije.', detalji: error.message });
+    }
+});
+
+// Authorized [READ] - zabrane
+app.get('/api/auth/korisnik/moje-zabrane', authMiddleWare, async (req, res) => {
+    const korisnik_id = req.user.id; // Izravno i sigurno preuzimanje ID-a iz tokena
+
+    try {
+        // Dohvaćamo sve zabrane za tog korisnika, sortirane tako da su najnovije prve
+        const [mojeZabrane] = await db.query(
+            'SELECT * FROM Zabrane_Pristupa WHERE korisnik_id = ? ORDER BY id DESC',
+            [korisnik_id]
+        );
+
+        res.status(200).json(mojeZabrane);
+    } catch (error) {
+        res.status(500).json({
+            greska: 'Greška prilikom dohvaćanja vaših zabrana pristupa.',
+            detalji: error.message
+        });
+    }
+});
+
+//tu ce doci authorized read available resource
+// Authorized [READ] - resursi bez zabrane
+app.get('/api/auth/resursi-dostupni', authMiddleWare, async (req, res) => {
+    const korisnik_id = req.user.id; // Izvlačimo ID iz tokena
+
+    try {
+        // SQL upit dohvaća sve resurse (r) za koje NE POSTOJI (NOT EXISTS)
+        // aktivna zabrana (z) za ovog korisnika koja se odnosi na r.id ILI r.tip
+
+        const sqlDostupniResursi = `
+            SELECT r.* FROM Resursi r
+            WHERE NOT EXISTS (
+                SELECT 1 
+                FROM Zabrane_Pristupa z
+                WHERE z.korisnik_id = ? 
+                  AND z.aktivna = true 
+                  AND (z.resurs_id = r.id OR z.tip_resursa = r.tip)
+            )
+        `;
+
+        const [dostupniResursi] = await db.query(sqlDostupniResursi, [korisnik_id]);
+        
+        res.status(200).json(dostupniResursi);
+    } catch (error) {
+        res.status(500).json({ 
+            greska: 'Greška prilikom dohvaćanja dostupnih resursa.', 
+            detalji: error.message 
+        });
+    }
+});
+
+
+// Authorized [READ] - resurs-zauzetost
+app.get('/api/auth/resursi/:id/zauzetost', authMiddleWare, async (req, res) => {
+    const { id } = req.params; // ID resursa za koji tražimo zauzetost
+
+    try {
+        // Dohvaćamo samo 'aktivne' rezervacije koje završavaju u budućnosti ili sadašnjosti
+        const [zauzetiTermini] = await db.query(
+            `SELECT vrijeme_pocetka, vrijeme_zavrsetka 
+             FROM Rezervacije 
+             WHERE resurs_id = ? 
+               AND status = 'aktivna' 
+               AND vrijeme_zavrsetka >= NOW()
+             ORDER BY vrijeme_pocetka ASC`,
+            [id]
+        );
+
+        res.status(200).json(zauzetiTermini);
+    } catch (error) {
+        res.status(500).json({ greska: 'Greška prilikom dohvaćanja rasporeda resursa.', detalji: error.message });
     }
 });
 
@@ -296,23 +495,69 @@ app.get('/api/zabrane', adminMiddleware, async (req, res) => {
     res.status(200).json(rows);
 } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri dohvaćanju zabrana' }); }
 });
+
 // [CREATE] - zabrana
 app.post('/api/zabrane', adminMiddleware, async (req, res) => {
     const { korisnik_id, administrator_id, resurs_id, tip_resursa, razlog, aktivna } = req.body;
+
+    // VALIDACIJA: Provjera isključivosti (XOR logika)
+    // Pretvaramo prisutnost vrijednosti u boolean (true/false)
+    const imaResurs = resurs_id ? true : false;
+    const imaTip = tip_resursa ? true : false;
+
+    // Ako su oba prisutna ILI ako oba nedostaju, vraćamo 400 Bad Request
+    if (imaResurs === imaTip) {
+        return res.status(400).json({
+            greska: 'Neispravan zahtjev. Morate proslijediti isključivo resurs_id ILI tip_resursa. Ne možete oboje i ne možete nijedno.'
+        });
+    }
+
     try {
-        const [result] = await db.query('INSERT INTO Zabrane_Pristupa (korisnik_id, administrator_id, resurs_id, tip_resursa, razlog, aktivna) VALUES (?, ?, ?, ?, ?, ?)', [korisnik_id, administrator_id, resurs_id, tip_resursa, razlog, aktivna || true]);
+        // Osiguravamo da undefined postane pravi SQL NULL
+        const siguranResursId = resurs_id || null;
+        const siguranTipResursa = tip_resursa || null;
+
+        const [result] = await db.query(
+            'INSERT INTO Zabrane_Pristupa (korisnik_id, administrator_id, resurs_id, tip_resursa, razlog, aktivna) VALUES (?, ?, ?, ?, ?, ?)',
+            [korisnik_id, administrator_id, siguranResursId, siguranTipResursa, razlog, aktivna !== undefined ? aktivna : true]
+        );
         res.status(201).json({ poruka: 'Zabrana uspješno kreirana', id: result.insertId });
-    } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri kreiranju zabrane' }); }
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ greska: 'Greška pri kreiranju zabrane' });
+    }
 });
+
 // [UPDATE] - zabrana
 app.put('/api/zabrane/:id', adminMiddleware, async (req, res) => {
     const { id } = req.params;
     const { korisnik_id, administrator_id, resurs_id, tip_resursa, razlog, aktivna } = req.body;
+
+    // VALIDACIJA: Ista provjera kao i kod CREATE rute
+    const imaResurs = resurs_id ? true : false;
+    const imaTip = tip_resursa ? true : false;
+
+    if (imaResurs === imaTip) {
+        return res.status(400).json({
+            greska: 'Neispravan zahtjev. Morate proslijediti isključivo resurs_id ILI tip_resursa.'
+        });
+    }
+
     try {
-        await db.query('UPDATE Zabrane_Pristupa SET korisnik_id = ?, administrator_id = ?, resurs_id = ?, tip_resursa = ?, razlog = ?, aktivna = ? WHERE id = ?', [korisnik_id, administrator_id, resurs_id, tip_resursa, razlog, aktivna, id]);
+        const siguranResursId = resurs_id || null;
+        const siguranTipResursa = tip_resursa || null;
+
+        await db.query(
+            'UPDATE Zabrane_Pristupa SET korisnik_id = ?, administrator_id = ?, resurs_id = ?, tip_resursa = ?, razlog = ?, aktivna = ? WHERE id = ?',
+            [korisnik_id, administrator_id, siguranResursId, siguranTipResursa, razlog, aktivna, id]
+        );
         res.status(200).json({ poruka: 'Zabrana pristupa uspješno ažurirana' });
-    } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri ažuriranju zabrane' }); }
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ greska: 'Greška pri ažuriranju zabrane' });
+    }
 });
+
 // [DELETE] - zabrana
 app.delete('/api/zabrane/:id', adminMiddleware, async (req, res) => {
     const { id } = req.params;
