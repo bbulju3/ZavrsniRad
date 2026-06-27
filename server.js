@@ -461,20 +461,38 @@ app.get('/api/administratori', adminMiddleware, async (req, res) => {
 });
 // [CREATE] - administrator
 app.post('/api/administratori', adminMiddleware, async (req, res) => {
-    const { ime, prezime, email, lozinka_hash } = req.body;
+    // Primamo 'lozinka' s frontenda
+    const { ime, prezime, email, lozinka } = req.body;
     try {
-        const [result] = await db.query('INSERT INTO Administratori (ime, prezime, email, lozinka_hash) VALUES (?, ?, ?, ?)', [ime, prezime, email, lozinka_hash]);
+        // Hashiramo lozinku prije spremanja u bazu
+        const hash = await bcrypt.hash(lozinka, 10);
+        const [result] = await db.query('INSERT INTO Administratori (ime, prezime, email, lozinka_hash) VALUES (?, ?, ?, ?)', [ime, prezime, email, hash]);
         res.status(201).json({ poruka: 'Administrator uspješno kreiran', id: result.insertId });
-    } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri kreiranju administratora' }); }
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ greska: 'Greška pri kreiranju administratora' });
+    }
 });
+
 // [UPDATE] - administrator
 app.put('/api/administratori/:id', adminMiddleware, async (req, res) => {
     const { id } = req.params;
-    const { ime, prezime, email, lozinka_hash } = req.body;
+    // Primamo 'lozinka' s frontenda (može biti prazna ako se ne mijenja)
+    const { ime, prezime, email, lozinka } = req.body;
     try {
-        await db.query('UPDATE Administratori SET ime = ?, prezime = ?, email = ?, lozinka_hash = ? WHERE id = ?', [ime, prezime, email, lozinka_hash, id]);
+        if (lozinka) {
+            // Ako je upisana nova lozinka, hashiramo je i ažuriramo sve
+            const hash = await bcrypt.hash(lozinka, 10);
+            await db.query('UPDATE Administratori SET ime = ?, prezime = ?, email = ?, lozinka_hash = ? WHERE id = ?', [ime, prezime, email, hash, id]);
+        } else {
+            // Ako nije, ažuriramo samo ostale podatke i ostavljamo stari hash netaknut
+            await db.query('UPDATE Administratori SET ime = ?, prezime = ?, email = ? WHERE id = ?', [ime, prezime, email, id]);
+        }
         res.status(200).json({ poruka: 'Administratorski podaci uspješno ažurirani' });
-    } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri ažuriranju administratora' }); }
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ greska: 'Greška pri ažuriranju administratora' });
+    }
 });
 // [DELETE] - administrator
 app.delete('/api/administratori/:id', adminMiddleware, async (req, res) => {
