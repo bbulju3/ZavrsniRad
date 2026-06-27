@@ -171,7 +171,6 @@ app.put('/api/auth/korisnik/profil', authMiddleWare, async (req, res) => {
 });
 
 // Authorized [CREATE] - rezervacija
-
 app.post('/api/auth/rezervacije', authMiddleWare, async (req, res) => {
     const { resurs_id, vrijeme_pocetka, vrijeme_zavrsetka } = req.body;
 
@@ -182,8 +181,19 @@ app.post('/api/auth/rezervacije', authMiddleWare, async (req, res) => {
         return res.status(400).json({ greska: 'Sva polja (resurs_id, vrijeme_pocetka, vrijeme_zavrsetka) su obavezna.' });
     }
 
-    try {
+    // --- TEMPORALNE VALIDACIJE ---
+    const start = new Date(vrijeme_pocetka);
+    const end = new Date(vrijeme_zavrsetka);
+    const now = new Date();
 
+    if (end <= start) {
+        return res.status(400).json({ greska: 'Vrijeme završetka mora biti nakon vremena početka.' });
+    }
+    if (start < now) {
+        return res.status(400).json({ greska: 'Nije moguće kreirati rezervaciju u prošlosti.' });
+    }
+
+    try {
         const [resursInfo] = await db.query('SELECT tip FROM Resursi WHERE id = ?', [resurs_id]);
 
         if (resursInfo.length === 0) {
@@ -268,6 +278,20 @@ app.put('/api/auth/rezervacije/:id', authMiddleWare, async (req, res) => {
         return res.status(400).json({ greska: 'Sva polja (vrijeme_pocetka, vrijeme_zavrsetka, status) su obavezna.' });
     }
 
+    // --- TEMPORALNE VALIDACIJE ---
+    const start = new Date(vrijeme_pocetka);
+    const end = new Date(vrijeme_zavrsetka);
+    const now = new Date();
+
+    if (end <= start) {
+        return res.status(400).json({ greska: 'Vrijeme završetka mora biti nakon vremena početka.' });
+    }
+
+    // Zabrana prebacivanja termina u prošlost
+    if (start < now) {
+        return res.status(400).json({ greska: 'Ne možete premjestiti rezervaciju u termin koji je već prošao.' });
+    }
+
     try {
         // Prvo provjeravamo postoji li rezervacija i pripada li stvarno tom korisniku
         const [provjeraVlasnistva] = await db.query(
@@ -289,7 +313,7 @@ app.put('/api/auth/rezervacije/:id', authMiddleWare, async (req, res) => {
 
         const tip_resursa = resursInfo[0].tip;
 
-        // --- 1. VALIDACIJA: Provjera ima li korisnik aktivnu zabranu pristupa (isto kao u CREATE) ---
+        // --- 1. VALIDACIJA: Provjera ima li korisnik aktivnu zabranu pristupa ---
         const [zabrane] = await db.query(
             'SELECT id, razlog FROM Zabrane_Pristupa WHERE korisnik_id = ? AND aktivna = true AND (resurs_id = ? OR tip_resursa = ?)',
             [korisnik_id, resurs_id, tip_resursa]
@@ -301,7 +325,7 @@ app.put('/api/auth/rezervacije/:id', authMiddleWare, async (req, res) => {
             });
         }
 
-        // --- 2. VALIDACIJA: Provjera preklapanja termina (samo ako se postavlja/ostavlja status 'aktivna') ---
+        // --- 2. VALIDACIJA: Provjera preklapanja termina ---
         if (status === 'aktivna') {
             const sqlProvjeraPreklapanja = `
                 SELECT id FROM Rezervacije 
@@ -622,22 +646,151 @@ app.get('/api/rezervacije', adminMiddleware, async (req, res) => {
         res.status(200).json(rows);
     } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri dohvaćanju rezervacija' }); }
 });
-// [CREATE] - rezervacija
+// [CREATE] - rezervacija (Admin)
 app.post('/api/rezervacije', adminMiddleware, async (req, res) => {
     const { korisnik_id, resurs_id, vrijeme_pocetka, vrijeme_zavrsetka, status, napomena_admina } = req.body;
+
+    // Osnovna provjera polja
+    if (!korisnik_id || !resurs_id || !vrijeme_pocetka || !vrijeme_zavrsetka) {
+        return res.status(400).json({ greska: 'Sva osnovna polja (korisnik_id, resurs_id, vrijeme_pocetka, vrijeme_zavrsetka) su obavezna.' });
+    }
+
+    // --- TEMPORALNE VALIDACIJE ---
+    const start = new Date(vrijeme_pocetka);
+    const end = new Date(vrijeme_zavrsetka);
+    const now = new Date();
+
+    if (end <= start) {
+        return res.status(400).json({ greska: 'Vrijeme završetka mora biti nakon vremena početka.' });
+    }
+    if (start < now) {
+        return res.status(400).json({ greska: 'Nije moguće kreirati rezervaciju u prošlosti.' });
+    }
+
     try {
-        const [result] = await db.query('INSERT INTO Rezervacije (korisnik_id, resurs_id, vrijeme_pocetka, vrijeme_zavrsetka, status, napomena_admina) VALUES (?, ?, ?, ?, ?, ?)', [korisnik_id, resurs_id, vrijeme_pocetka, vrijeme_zavrsetka, status || 'aktivna', napomena_admina || null]);
+        const [resursInfo] = await db.query('SELECT tip FROM Resursi WHERE id = ?', [resurs_id]);
+
+        if (resursInfo.length === 0) {
+            return res.status(404).json({ greska: 'Traženi resurs ne postoji u bazi.' });
+        }
+
+        const tip_resursa = resursInfo[0].tip;
+
+        // --- 1. VALIDACIJA ZABRANE: Za ciljanog korisnika ---
+        const [zabrane] = await db.query(
+            'SELECT id, razlog FROM Zabrane_Pristupa WHERE korisnik_id = ? AND aktivna = true AND (resurs_id = ? OR tip_resursa = ?)',
+            [korisnik_id, resurs_id, tip_resursa]
+        );
+
+        if (zabrane.length > 0) {
+            return res.status(403).json({
+                greska: 'Korisnik za kojega kreirate rezervaciju ima aktivnu zabranu pristupa!',
+                razlog: zabrane[0].razlog
+            });
+        }
+
+        // --- 2. VALIDACIJA PREKLAPANJA (Double-booking) ---
+        const sqlProvjeraPreklapanja = `
+            SELECT id FROM Rezervacije 
+            WHERE resurs_id = ? 
+              AND status = 'aktivna'
+              AND vrijeme_pocetka < ? 
+              AND vrijeme_zavrsetka > ?
+        `;
+        const [preklapanja] = await db.query(sqlProvjeraPreklapanja, [resurs_id, vrijeme_zavrsetka, vrijeme_pocetka]);
+
+        if (preklapanja.length > 0) {
+            return res.status(409).json({ greska: 'Termin je zauzet. Odabrani resurs je već rezerviran u navedenom vremenu.' });
+        }
+
+        // --- 3. IZVRŠAVANJE UPISA ---
+        const [result] = await db.query(
+            'INSERT INTO Rezervacije (korisnik_id, resurs_id, vrijeme_pocetka, vrijeme_zavrsetka, status, napomena_admina) VALUES (?, ?, ?, ?, ?, ?)',
+            [korisnik_id, resurs_id, vrijeme_pocetka, vrijeme_zavrsetka, status || 'aktivna', napomena_admina || null]
+        );
+
         res.status(201).json({ poruka: 'Rezervacija uspješno kreirana', id: result.insertId });
-    } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri kreiranju rezervacije' }); }
+
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ greska: 'Greška pri kreiranju rezervacije' });
+    }
 });
-// [UPDATE] - rezervacija
+// [UPDATE] - rezervacija (Admin)
 app.put('/api/rezervacije/:id', adminMiddleware, async (req, res) => {
     const { id } = req.params;
     const { korisnik_id, resurs_id, vrijeme_pocetka, vrijeme_zavrsetka, status, napomena_admina } = req.body;
+
+    if (!korisnik_id || !resurs_id || !vrijeme_pocetka || !vrijeme_zavrsetka || !status) {
+        return res.status(400).json({ greska: 'Nedostaju obavezni podaci za ažuriranje.' });
+    }
+
+    // --- TEMPORALNE VALIDACIJE ---
+    const start = new Date(vrijeme_pocetka);
+    const end = new Date(vrijeme_zavrsetka);
+    const now = new Date();
+
+    if (end <= start) {
+        return res.status(400).json({ greska: 'Vrijeme završetka mora biti nakon vremena početka.' });
+    }
+
+    // Provjera prošlosti kod ažuriranja
+    if (start < now) {
+        return res.status(400).json({ greska: 'Ne možete premjestiti rezervaciju u termin koji je već prošao.' });
+    }
+
     try {
-        await db.query('UPDATE Rezervacije SET korisnik_id = ?, resurs_id = ?, vrijeme_pocetka = ?, vrijeme_zavrsetka = ?, status = ?, napomena_admina = ? WHERE id = ?', [korisnik_id, resurs_id, vrijeme_pocetka, vrijeme_zavrsetka, status, napomena_admina, id]);
+        const [resursInfo] = await db.query('SELECT tip FROM Resursi WHERE id = ?', [resurs_id]);
+
+        if (resursInfo.length === 0) {
+            return res.status(404).json({ greska: 'Traženi resurs ne postoji u bazi.' });
+        }
+
+        const tip_resursa = resursInfo[0].tip;
+
+        // --- 1. VALIDACIJA ZABRANE: Za ciljanog korisnika ---
+        const [zabrane] = await db.query(
+            'SELECT id, razlog FROM Zabrane_Pristupa WHERE korisnik_id = ? AND aktivna = true AND (resurs_id = ? OR tip_resursa = ?)',
+            [korisnik_id, resurs_id, tip_resursa]
+        );
+
+        if (zabrane.length > 0) {
+            return res.status(403).json({
+                greska: 'Odabrani korisnik ima aktivnu zabranu pristupa za ovaj resurs!',
+                razlog: zabrane[0].razlog
+            });
+        }
+
+        // --- 2. VALIDACIJA PREKLAPANJA (Double-booking) ---
+        // Provjeravamo preklapanje samo ako je status rezervacije "aktivna"
+        if (status === 'aktivna') {
+            const sqlProvjeraPreklapanja = `
+                SELECT id FROM Rezervacije 
+                WHERE resurs_id = ? 
+                  AND status = 'aktivna'
+                  AND id != ? 
+                  AND vrijeme_pocetka < ? 
+                  AND vrijeme_zavrsetka > ?
+            `;
+            const [preklapanja] = await db.query(sqlProvjeraPreklapanja, [resurs_id, id, vrijeme_zavrsetka, vrijeme_pocetka]);
+
+            if (preklapanja.length > 0) {
+                return res.status(409).json({ greska: 'Termin je zauzet. Odabrani resurs je već rezerviran u navedenom vremenu.' });
+            }
+        }
+
+        // --- 3. IZVRŠAVANJE AŽURIRANJA ---
+        await db.query(
+            'UPDATE Rezervacije SET korisnik_id = ?, resurs_id = ?, vrijeme_pocetka = ?, vrijeme_zavrsetka = ?, status = ?, napomena_admina = ? WHERE id = ?',
+            [korisnik_id, resurs_id, vrijeme_pocetka, vrijeme_zavrsetka, status, napomena_admina, id]
+        );
+
         res.status(200).json({ poruka: 'Rezervacija uspješno izmijenjena' });
-    } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri izmjeni rezervacije' }); }
+
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ greska: 'Greška pri izmjeni rezervacije' });
+    }
 });
 // [DELETE] - rezervacija
 app.delete('/api/rezervacije/:id', adminMiddleware, async (req, res) => {
