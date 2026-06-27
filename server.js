@@ -417,19 +417,29 @@ app.get('/api/korisnici', adminMiddleware, async (req, res) => {
 } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri dohvaćanju korisnika' }); }
 });
 // [CREATE] - korisnik
-app.post('/api/korisnici', adminMiddleware, async (req, res) => {    
-    const { ime, prezime, email, lozinka_hash } = req.body;
-    try {       
-        const [result] = await db.query('INSERT INTO Korisnici (ime, prezime, email, lozinka_hash) VALUES (?, ?, ?, ?)', [ime, prezime, email, lozinka_hash]);      
-        res.status(201).json({ poruka: 'Korisnik uspješno kreiran', id: result.insertId });
+app.post('/api/korisnici', adminMiddleware, async (req, res) => {
+    const { ime, prezime, email, lozinka } = req.body; // Koristimo 'lozinka'
+    try {
+        const hash = await bcrypt.hash(lozinka, 10);
+        await db.query('INSERT INTO Korisnici (ime, prezime, email, lozinka_hash) VALUES (?, ?, ?, ?)', [ime, prezime, email, hash]);
+        res.status(201).json({ poruka: 'Korisnik uspješno kreiran' });
     } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri kreiranju korisnika' }); }
 });
+
 // [UPDATE] - korisnik
-app.put('/api/korisnici/:id', adminMiddleware, async (req, res) => {    
+app.put('/api/korisnici/:id', adminMiddleware, async (req, res) => {
     const { id } = req.params;
-    const { ime, prezime, email, lozinka_hash } = req.body;
-    try {      
-        await db.query('UPDATE Korisnici SET ime = ?, prezime = ?, email = ?, lozinka_hash = ? WHERE id = ?', [ime, prezime, email, lozinka_hash, id]);
+    const { ime, prezime, email, lozinka } = req.body;
+
+    try {
+        if (lozinka) {
+            // Ako je poslana nova lozinka, hashiraj je
+            const hash = await bcrypt.hash(lozinka, 10);
+            await db.query('UPDATE Korisnici SET ime = ?, prezime = ?, email = ?, lozinka_hash = ? WHERE id = ?', [ime, prezime, email, hash, id]);
+        } else {
+            // Ako nije, ažuriraj samo ostale podatke
+            await db.query('UPDATE Korisnici SET ime = ?, prezime = ?, email = ? WHERE id = ?', [ime, prezime, email, id]);
+        }
         res.status(200).json({ poruka: 'Korisnički podaci uspješno ažurirani' });
     } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri ažuriranju korisnika' }); }
 });
