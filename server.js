@@ -18,6 +18,20 @@ app.use(cors());
 
 app.use(express.json());
 
+// Helper funkcija za validaciju emaila
+const isValidEmail = (email) => {
+    // Standardni regex za provjeru osnovnog formata emaila (nesto@nesto.domena)
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
+};
+
+// Helper funkcija za validaciju lozinke
+const isValidPassword = (password) => {
+    // Mora imati min 8 znakova, barem 1 malo slovo, 1 veliko slovo i 1 broj
+    const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/;
+    return passwordRegex.test(password);
+};
+
 app.post('/api/auth/register', async (req, res) => {
     const { ime, prezime, email, lozinka } = req.body;
 
@@ -133,22 +147,28 @@ app.post('/api/auth/admin-login', async (req, res) => {
 
 // Authorized [UPDATE] - ažuriranje vlastitog korisničkog profila
 app.put('/api/auth/korisnik/profil', authMiddleWare, async (req, res) => {
-    const korisnik_id = req.user.id; // Sigurno preuzimanje ID-a iz tokena
+    const korisnik_id = req.user.id;
     const { ime, prezime, email, lozinka } = req.body;
 
     if (!ime || !prezime || !email) {
         return res.status(400).json({ greska: 'Polja ime, prezime i email su obavezna.' });
     }
 
+    if (!isValidEmail(email)) {
+        return res.status(400).json({ greska: 'Neispravan format email adrese.' });
+    }
+
+    if (lozinka && !isValidPassword(lozinka)) {
+        return res.status(400).json({ greska: 'Nova lozinka mora imati barem 8 znakova, uključujući barem jedno veliko slovo, jedno malo slovo i jedan broj.' });
+    }
+
     try {
-        // Provjera da korisnik ne pokuša promijeniti email u neki koji već koristi drugi korisnik
         const [postojiEmail] = await db.query('SELECT id FROM Korisnici WHERE email = ? AND id != ?', [email, korisnik_id]);
         if (postojiEmail.length > 0) {
             return res.status(400).json({ greska: 'Uneseni email je već u upotrebi od strane drugog korisnika.' });
         }
 
         if (lozinka) {
-            // Ako je korisnik unio i novu lozinku, hashiramo je
             const sol = await bcrypt.genSalt(10);
             const hashiranaLozinka = await bcrypt.hash(lozinka, sol);
 
@@ -157,7 +177,6 @@ app.put('/api/auth/korisnik/profil', authMiddleWare, async (req, res) => {
                 [ime, prezime, email, hashiranaLozinka, korisnik_id]
             );
         } else {
-            // Ako se lozinka ne mijenja, ažuriramo samo osnovne podatke
             await db.query(
                 'UPDATE Korisnici SET ime = ?, prezime = ?, email = ? WHERE id = ?',
                 [ime, prezime, email, korisnik_id]
@@ -442,12 +461,23 @@ app.get('/api/korisnici', adminMiddleware, async (req, res) => {
 });
 // [CREATE] - korisnik
 app.post('/api/korisnici', adminMiddleware, async (req, res) => {
-    const { ime, prezime, email, lozinka } = req.body; // Koristimo 'lozinka'
+    const { ime, prezime, email, lozinka } = req.body;
+
+    if (!email || !isValidEmail(email)) {
+        return res.status(400).json({ greska: 'Neispravan format email adrese.' });
+    }
+    if (!lozinka || !isValidPassword(lozinka)) {
+        return res.status(400).json({ greska: 'Lozinka mora imati barem 8 znakova, uključujući barem jedno veliko slovo, jedno malo slovo i jedan broj.' });
+    }
+
     try {
         const hash = await bcrypt.hash(lozinka, 10);
         await db.query('INSERT INTO Korisnici (ime, prezime, email, lozinka_hash) VALUES (?, ?, ?, ?)', [ime, prezime, email, hash]);
         res.status(201).json({ poruka: 'Korisnik uspješno kreiran' });
-    } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri kreiranju korisnika' }); }
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ greska: 'Greška pri kreiranju korisnika' });
+    }
 });
 
 // [UPDATE] - korisnik
@@ -455,17 +485,25 @@ app.put('/api/korisnici/:id', adminMiddleware, async (req, res) => {
     const { id } = req.params;
     const { ime, prezime, email, lozinka } = req.body;
 
+    if (email && !isValidEmail(email)) {
+        return res.status(400).json({ greska: 'Neispravan format email adrese.' });
+    }
+    if (lozinka && !isValidPassword(lozinka)) {
+        return res.status(400).json({ greska: 'Nova lozinka mora imati barem 8 znakova, uključujući barem jedno veliko slovo, jedno malo slovo i jedan broj.' });
+    }
+
     try {
         if (lozinka) {
-            // Ako je poslana nova lozinka, hashiraj je
             const hash = await bcrypt.hash(lozinka, 10);
             await db.query('UPDATE Korisnici SET ime = ?, prezime = ?, email = ?, lozinka_hash = ? WHERE id = ?', [ime, prezime, email, hash, id]);
         } else {
-            // Ako nije, ažuriraj samo ostale podatke
             await db.query('UPDATE Korisnici SET ime = ?, prezime = ?, email = ? WHERE id = ?', [ime, prezime, email, id]);
         }
         res.status(200).json({ poruka: 'Korisnički podaci uspješno ažurirani' });
-    } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri ažuriranju korisnika' }); }
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ greska: 'Greška pri ažuriranju korisnika' });
+    }
 });
 // [DELETE] - korisnik
 app.delete('/api/korisnici/:id', adminMiddleware, async (req, res) => {
@@ -485,10 +523,16 @@ app.get('/api/administratori', adminMiddleware, async (req, res) => {
 });
 // [CREATE] - administrator
 app.post('/api/administratori', adminMiddleware, async (req, res) => {
-    // Primamo 'lozinka' s frontenda
     const { ime, prezime, email, lozinka } = req.body;
+
+    if (!email || !isValidEmail(email)) {
+        return res.status(400).json({ greska: 'Neispravan format email adrese.' });
+    }
+    if (!lozinka || !isValidPassword(lozinka)) {
+        return res.status(400).json({ greska: 'Lozinka mora imati barem 8 znakova, uključujući barem jedno veliko slovo, jedno malo slovo i jedan broj.' });
+    }
+
     try {
-        // Hashiramo lozinku prije spremanja u bazu
         const hash = await bcrypt.hash(lozinka, 10);
         const [result] = await db.query('INSERT INTO Administratori (ime, prezime, email, lozinka_hash) VALUES (?, ?, ?, ?)', [ime, prezime, email, hash]);
         res.status(201).json({ poruka: 'Administrator uspješno kreiran', id: result.insertId });
@@ -501,15 +545,21 @@ app.post('/api/administratori', adminMiddleware, async (req, res) => {
 // [UPDATE] - administrator
 app.put('/api/administratori/:id', adminMiddleware, async (req, res) => {
     const { id } = req.params;
-    // Primamo 'lozinka' s frontenda (može biti prazna ako se ne mijenja)
     const { ime, prezime, email, lozinka } = req.body;
+
+    if (email && !isValidEmail(email)) {
+        return res.status(400).json({ greska: 'Neispravan format email adrese.' });
+    }
+    // Provjeravamo lozinku SAMO ako je poslana
+    if (lozinka && !isValidPassword(lozinka)) {
+        return res.status(400).json({ greska: 'Nova lozinka mora imati barem 8 znakova, uključujući barem jedno veliko slovo, jedno malo slovo i jedan broj.' });
+    }
+
     try {
         if (lozinka) {
-            // Ako je upisana nova lozinka, hashiramo je i ažuriramo sve
             const hash = await bcrypt.hash(lozinka, 10);
             await db.query('UPDATE Administratori SET ime = ?, prezime = ?, email = ?, lozinka_hash = ? WHERE id = ?', [ime, prezime, email, hash, id]);
         } else {
-            // Ako nije, ažuriramo samo ostale podatke i ostavljamo stari hash netaknut
             await db.query('UPDATE Administratori SET ime = ?, prezime = ?, email = ? WHERE id = ?', [ime, prezime, email, id]);
         }
         res.status(200).json({ poruka: 'Administratorski podaci uspješno ažurirani' });
