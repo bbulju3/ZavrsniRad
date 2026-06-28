@@ -570,14 +570,16 @@ app.get('/api/zabrane', adminMiddleware, async (req, res) => {
 
 // [CREATE] - zabrana
 app.post('/api/zabrane', adminMiddleware, async (req, res) => {
-    const { korisnik_id, administrator_id, resurs_id, tip_resursa, razlog, aktivna } = req.body;
+    // 1. Vadimo ID admina iz middlewarea (ovisno kako si nazvao ključ u payloadu pri kreiranju tokena)
+    const administrator_id = req.user.id || req.user.admin_id;
+
+    // 2. administrator_id je uklonjen iz destrukturiranja req.body
+    const { korisnik_id, resurs_id, tip_resursa, razlog, aktivna } = req.body;
 
     // VALIDACIJA: Provjera isključivosti (XOR logika)
-    // Pretvaramo prisutnost vrijednosti u boolean (true/false)
     const imaResurs = resurs_id ? true : false;
     const imaTip = tip_resursa ? true : false;
 
-    // Ako su oba prisutna ILI ako oba nedostaju, vraćamo 400 Bad Request
     if (imaResurs === imaTip) {
         return res.status(400).json({
             greska: 'Neispravan zahtjev. Morate proslijediti isključivo resurs_id ILI tip_resursa. Ne možete oboje i ne možete nijedno.'
@@ -585,7 +587,6 @@ app.post('/api/zabrane', adminMiddleware, async (req, res) => {
     }
 
     try {
-        // Osiguravamo da undefined postane pravi SQL NULL
         const siguranResursId = resurs_id || null;
         const siguranTipResursa = tip_resursa || null;
 
@@ -603,9 +604,14 @@ app.post('/api/zabrane', adminMiddleware, async (req, res) => {
 // [UPDATE] - zabrana
 app.put('/api/zabrane/:id', adminMiddleware, async (req, res) => {
     const { id } = req.params;
-    const { korisnik_id, administrator_id, resurs_id, tip_resursa, razlog, aktivna } = req.body;
 
-    // VALIDACIJA: Ista provjera kao i kod CREATE rute
+    // I ovdje vadimo ID admina direktno iz middlewarea
+    const administrator_id = req.user.id || req.user.admin_id;
+
+    // administrator_id je uklonjen iz destrukturiranja req.body
+    const { korisnik_id, resurs_id, tip_resursa, razlog, aktivna } = req.body;
+
+    // VALIDACIJA
     const imaResurs = resurs_id ? true : false;
     const imaTip = tip_resursa ? true : false;
 
