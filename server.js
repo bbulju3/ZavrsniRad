@@ -272,11 +272,16 @@ app.get('/api/auth/korisnik/moje-rezervacije', authMiddleWare, async (req, res) 
     const korisnik_id = req.user.id; // Izravno i sigurno preuzimanje ID-a iz tokena
 
     try {
-        // Dohvaćamo sve rezervacije za tog korisnika, sortirane tako da su najnovije prve
-        const [mojeRezervacije] = await db.query(
-            'SELECT * FROM Rezervacije WHERE korisnik_id = ? ORDER BY id DESC',
-            [korisnik_id]
-        );
+        // Koristimo JOIN kako bismo uzeli sve iz rezervacija i samo naziv iz resursa
+        const upit = `
+            SELECT Rezervacije.*, Resursi.naziv AS naziv_resursa 
+            FROM Rezervacije 
+            JOIN Resursi ON Rezervacije.resurs_id = Resursi.id 
+            WHERE Rezervacije.korisnik_id = ? 
+            ORDER BY Rezervacije.id DESC
+        `;
+
+        const [mojeRezervacije] = await db.query(upit, [korisnik_id]);
 
         res.status(200).json(mojeRezervacije);
     } catch (error) {
@@ -383,11 +388,17 @@ app.get('/api/auth/korisnik/moje-zabrane', authMiddleWare, async (req, res) => {
     const korisnik_id = req.user.id; // Izravno i sigurno preuzimanje ID-a iz tokena
 
     try {
-        // Dohvaćamo sve zabrane za tog korisnika, sortirane tako da su najnovije prve
-        const [mojeZabrane] = await db.query(
-            'SELECT * FROM Zabrane_Pristupa WHERE korisnik_id = ? ORDER BY id DESC',
-            [korisnik_id]
-        );
+        // Koristimo LEFT JOIN jer resurs_id u Zabrane_Pristupa može biti NULL 
+        // (ako je zabrana na cijeli tip_resursa umjesto na specifičan resurs)
+        const upit = `
+            SELECT Zabrane_Pristupa.*, Resursi.naziv AS naziv_resursa 
+            FROM Zabrane_Pristupa 
+            LEFT JOIN Resursi ON Zabrane_Pristupa.resurs_id = Resursi.id 
+            WHERE Zabrane_Pristupa.korisnik_id = ? 
+            ORDER BY Zabrane_Pristupa.id DESC
+        `;
+
+        const [mojeZabrane] = await db.query(upit, [korisnik_id]);
 
         res.status(200).json(mojeZabrane);
     } catch (error) {
