@@ -192,8 +192,6 @@ app.put('/api/auth/korisnik/profil', authMiddleWare, async (req, res) => {
 // Authorized [CREATE] - rezervacija
 app.post('/api/auth/rezervacije', authMiddleWare, async (req, res) => {
     const { resurs_id, vrijeme_pocetka, vrijeme_zavrsetka } = req.body;
-
-    // ID korisnika automatski izvlačimo iz JWT tokena (postavio ga je authMiddleware)
     const korisnik_id = req.user.id;
 
     if (!resurs_id || !vrijeme_pocetka || !vrijeme_zavrsetka) {
@@ -212,16 +210,21 @@ app.post('/api/auth/rezervacije', authMiddleWare, async (req, res) => {
         return res.status(400).json({ greska: 'Nije moguće kreirati rezervaciju u prošlosti.' });
     }
 
+    // NOVA PROVJERA: Trajanje ne smije biti dulje od 8 sati
+    const OSAM_SATI_MS = 8 * 60 * 60 * 1000;
+    if (end.getTime() - start.getTime() > OSAM_SATI_MS) {
+        return res.status(400).json({ greska: 'Rezervacija ne smije trajati dulje od 8 sati.' });
+    }
+
     try {
         const [resursInfo] = await db.query('SELECT tip FROM Resursi WHERE id = ?', [resurs_id]);
 
         if (resursInfo.length === 0) {
             return res.status(404).json({ greska: 'Traženi resurs ne postoji u bazi.' });
         }
-
         const tip_resursa = resursInfo[0].tip;
 
-        // --- 1. VALIDACIJA: Provjera ima li korisnik aktivnu zabranu pristupa ---
+        // --- 1. VALIDACIJA: Zabrane pristupa ---
         const [zabrane] = await db.query(
             'SELECT id, razlog FROM Zabrane_Pristupa WHERE korisnik_id = ? AND aktivna = true AND (resurs_id = ? OR tip_resursa = ?)',
             [korisnik_id, resurs_id, tip_resursa]
@@ -233,7 +236,28 @@ app.post('/api/auth/rezervacije', authMiddleWare, async (req, res) => {
             });
         }
 
-        // --- 2. VALIDACIJA: SQL algoritam za preklapanje termina (Double-booking prevention) ---
+        // --- 2. VALIDACIJA: Zabrana rezervacije istog resursa unutar 24h za istog korisnika ---
+        const DVADESETCETIRI_SATA_MS = 24 * 60 * 60 * 1000;
+        const startMinus24h = new Date(start.getTime() - DVADESETCETIRI_SATA_MS);
+        const endPlus24h = new Date(end.getTime() + DVADESETCETIRI_SATA_MS);
+
+        const sqlProvjera24h = `
+            SELECT id FROM Rezervacije 
+            WHERE korisnik_id = ? 
+              AND resurs_id = ? 
+              AND status = 'aktivna'
+              AND vrijeme_pocetka < ? 
+              AND vrijeme_zavrsetka > ?
+        `;
+        const [preklapanja24h] = await db.query(sqlProvjera24h, [korisnik_id, resurs_id, endPlus24h, startMinus24h]);
+
+        if (preklapanja24h.length > 0) {
+            return res.status(429).json({
+                greska: 'Već imate rezervaciju za ovaj resurs unutar 24 sata (prije ili poslije odabranog termina).'
+            });
+        }
+
+        // --- 3. VALIDACIJA: Globalni double-booking ---
         const sqlProvjeraPreklapanja = `
             SELECT id FROM Rezervacije 
             WHERE resurs_id = ? 
@@ -241,8 +265,6 @@ app.post('/api/auth/rezervacije', authMiddleWare, async (req, res) => {
               AND vrijeme_pocetka < ? 
               AND vrijeme_zavrsetka > ?
         `;
-
-        // Šaljemo parametre: resurs_id, novi_zavrsetak, novi_pocetak
         const [preklapanja] = await db.query(sqlProvjeraPreklapanja, [resurs_id, vrijeme_zavrsetka, vrijeme_pocetka]);
 
         if (preklapanja.length > 0) {
@@ -251,7 +273,7 @@ app.post('/api/auth/rezervacije', authMiddleWare, async (req, res) => {
             });
         }
 
-        // --- 3. IZVRŠAVANJE: Ako su sve provjere prošle, upisujemo rezervaciju ---
+        // --- 4. IZVRŠAVANJE ---
         const [result] = await db.query(
             'INSERT INTO Rezervacije (korisnik_id, resurs_id, vrijeme_pocetka, vrijeme_zavrsetka, status) VALUES (?, ?, ?, ?, ?)',
             [korisnik_id, resurs_id, vrijeme_pocetka, vrijeme_zavrsetka, 'aktivna']
@@ -294,9 +316,9 @@ app.get('/api/auth/korisnik/moje-rezervacije', authMiddleWare, async (req, res) 
 
 // Authorized [UPDATE] - rezervacija (promjena termina ili otkazivanje)
 app.put('/api/auth/rezervacije/:id', authMiddleWare, async (req, res) => {
-    const { id } = req.params; // ID rezervacije koju mijenjamo
+    const { id } = req.params;
     const { vrijeme_pocetka, vrijeme_zavrsetka, status } = req.body;
-    const korisnik_id = req.user.id; // Izvlačimo iz tokena radi sigurnosti
+    const korisnik_id = req.user.id;
 
     if (!vrijeme_pocetka || !vrijeme_zavrsetka || !status) {
         return res.status(400).json({ greska: 'Sva polja (vrijeme_pocetka, vrijeme_zavrsetka, status) su obavezna.' });
@@ -310,14 +332,17 @@ app.put('/api/auth/rezervacije/:id', authMiddleWare, async (req, res) => {
     if (end <= start) {
         return res.status(400).json({ greska: 'Vrijeme završetka mora biti nakon vremena početka.' });
     }
-
-    // Zabrana prebacivanja termina u prošlost
     if (start < now) {
         return res.status(400).json({ greska: 'Ne možete premjestiti rezervaciju u termin koji je već prošao.' });
     }
 
+    // NOVA PROVJERA: Trajanje ne smije biti dulje od 8 sati
+    const OSAM_SATI_MS = 8 * 60 * 60 * 1000;
+    if (end.getTime() - start.getTime() > OSAM_SATI_MS) {
+        return res.status(400).json({ greska: 'Rezervacija ne smije trajati dulje od 8 sati.' });
+    }
+
     try {
-        // Prvo provjeravamo postoji li rezervacija i pripada li stvarno tom korisniku
         const [provjeraVlasnistva] = await db.query(
             'SELECT resurs_id FROM Rezervacije WHERE id = ? AND korisnik_id = ?',
             [id, korisnik_id]
@@ -328,16 +353,14 @@ app.put('/api/auth/rezervacije/:id', authMiddleWare, async (req, res) => {
         }
 
         const resurs_id = provjeraVlasnistva[0].resurs_id;
-
         const [resursInfo] = await db.query('SELECT tip FROM Resursi WHERE id = ?', [resurs_id]);
 
         if (resursInfo.length === 0) {
             return res.status(404).json({ greska: 'Traženi resurs ne postoji u bazi.' });
         }
-
         const tip_resursa = resursInfo[0].tip;
 
-        // --- 1. VALIDACIJA: Provjera ima li korisnik aktivnu zabranu pristupa ---
+        // --- 1. VALIDACIJA: Zabrane pristupa ---
         const [zabrane] = await db.query(
             'SELECT id, razlog FROM Zabrane_Pristupa WHERE korisnik_id = ? AND aktivna = true AND (resurs_id = ? OR tip_resursa = ?)',
             [korisnik_id, resurs_id, tip_resursa]
@@ -349,8 +372,30 @@ app.put('/api/auth/rezervacije/:id', authMiddleWare, async (req, res) => {
             });
         }
 
-        // --- 2. VALIDACIJA: Provjera preklapanja termina ---
         if (status === 'aktivna') {
+            // --- 2. VALIDACIJA: Zabrana rezervacije istog resursa unutar 24h (isključujući samu sebe) ---
+            const DVADESETCETIRI_SATA_MS = 24 * 60 * 60 * 1000;
+            const startMinus24h = new Date(start.getTime() - DVADESETCETIRI_SATA_MS);
+            const endPlus24h = new Date(end.getTime() + DVADESETCETIRI_SATA_MS);
+
+            const sqlProvjera24h = `
+                SELECT id FROM Rezervacije 
+                WHERE korisnik_id = ? 
+                  AND resurs_id = ? 
+                  AND status = 'aktivna'
+                  AND id != ?
+                  AND vrijeme_pocetka < ? 
+                  AND vrijeme_zavrsetka > ?
+            `;
+            const [preklapanja24h] = await db.query(sqlProvjera24h, [korisnik_id, resurs_id, id, endPlus24h, startMinus24h]);
+
+            if (preklapanja24h.length > 0) {
+                return res.status(429).json({
+                    greska: 'Već imate aktivnu rezervaciju za ovaj resurs unutar 24 sata (prije ili poslije odabranog termina).'
+                });
+            }
+
+            // --- 3. VALIDACIJA: Globalni double-booking ---
             const sqlProvjeraPreklapanja = `
                 SELECT id FROM Rezervacije 
                 WHERE resurs_id = ? 
@@ -359,8 +404,6 @@ app.put('/api/auth/rezervacije/:id', authMiddleWare, async (req, res) => {
                   AND vrijeme_pocetka < ? 
                   AND vrijeme_zavrsetka > ?
             `;
-
-            // Proslijeđujemo resurs_id, id trenutne rezervacije (da preskoči samu sebe), zavrsetak i pocetak
             const [preklapanja] = await db.query(sqlProvjeraPreklapanja, [resurs_id, id, vrijeme_zavrsetka, vrijeme_pocetka]);
 
             if (preklapanja.length > 0) {
@@ -370,7 +413,7 @@ app.put('/api/auth/rezervacije/:id', authMiddleWare, async (req, res) => {
             }
         }
 
-        // --- 3. IZVRŠAVANJE: Ažuriranje podataka u bazi ---
+        // --- 4. IZVRŠAVANJE ---
         await db.query(
             'UPDATE Rezervacije SET vrijeme_pocetka = ?, vrijeme_zavrsetka = ?, status = ? WHERE id = ? AND korisnik_id = ?',
             [vrijeme_pocetka, vrijeme_zavrsetka, status, id, korisnik_id]
