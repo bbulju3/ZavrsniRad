@@ -1,7 +1,5 @@
 const mysql = require('mysql2');
 
-//require('dotenv').config();
-
 const pool = mysql.createPool({
     host: process.env.DB_HOST,
     port: process.env.DB_PORT,
@@ -14,7 +12,6 @@ const pool = mysql.createPool({
     ssl: {
         rejectUnauthorized: false
     },
-    // --- DODANO ZA RJEŠAVANJE VREMENSKE ZONE ---
     timezone: 'Z',
     dateStrings: true
 });

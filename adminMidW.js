@@ -13,15 +13,9 @@ module.exports = (req, res, next) => {
         const dekodiraniAdmin = jwt.verify(token, process.env.JWT_SECRET);
 
         req.user = dekodiraniAdmin;
-//ovo se komplet da zakomentirati, tablice za usera i admina su ionako odvojene, cisto PoC
-        if (req.user.uloga !== 'admin') {
-            return res.status(403).json({
-                greska: 'Zabranjen pristup. Ova akcija zahtijeva administratorska prava.'
-            });
-        }
 
         next();
     } catch (error) {
-        res.status(401).json({ greska: 'Neispravan ili istekao token.' });
+        res.status(401).json({ greska: 'JWT token je istekao ili je neispravan.' });
     }
 };
