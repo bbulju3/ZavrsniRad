@@ -20,47 +20,17 @@ app.use(express.json());
 
 // Helper funkcija za validaciju emaila
 const isValidEmail = (email) => {
-    // Standardni regex za provjeru osnovnog formata emaila (nesto@nesto.domena)
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     return emailRegex.test(email);
 };
 
 // Helper funkcija za validaciju lozinke
 const isValidPassword = (password) => {
-    // Mora imati min 8 znakova, barem 1 malo slovo, 1 veliko slovo i 1 broj
     const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/;
     return passwordRegex.test(password);
 };
 
-app.post('/api/auth/register', async (req, res) => {
-    const { ime, prezime, email, lozinka } = req.body;
-
-    if (!ime || !prezime || !email || !lozinka) {
-        return res.status(400).json({ greska: 'Sva polja su obavezna.' });
-    }
-
-    try {
-        const [postojiKorisnik] = await db.query('SELECT id FROM Korisnici WHERE email = ?', [email]);
-        if (postojiKorisnik.length > 0) {
-            return res.status(400).json({ greska: 'Korisnik s ovim emailom već postoji.' });
-        }
-
-        const sol = await bcrypt.genSalt(10);
-        const hashiranaLozinka = await bcrypt.hash(lozinka, sol);
-
-        const [result] = await db.query(
-            'INSERT INTO Korisnici (ime, prezime, email, lozinka_hash) VALUES (?, ?, ?, ?)',
-            [ime, prezime, email, hashiranaLozinka]
-        );
-
-        res.status(201).json({ poruka: 'Korisnik uspješno registriran!', korisnikId: result.insertId });
-    } catch (error) {
-        res.status(500).json({ greska: 'Greška prilikom registracije.', detalji: error.message });
-    }
-});
-
-//Korisnicki login i token
-
+// RUTA - User login i token
 app.post('/api/auth/login', async (req, res) => {
     const { email, lozinka } = req.body;
 
@@ -102,8 +72,7 @@ app.post('/api/auth/login', async (req, res) => {
     }
 });
 
-//Admin login i token
-
+// RUTA - Admin login i token
 app.post('/api/auth/admin-login', async (req, res) => {
     const { email, lozinka } = req.body;
 
@@ -145,7 +114,7 @@ app.post('/api/auth/admin-login', async (req, res) => {
     }
 });
 
-// Authorized [UPDATE] - ažuriranje vlastitog korisničkog profila
+// RUTA - User [UPDATE] korisnik
 app.put('/api/auth/korisnik/profil', authMiddleWare, async (req, res) => {
     const korisnik_id = req.user.id;
     const { ime, prezime, email, lozinka } = req.body;
@@ -189,7 +158,7 @@ app.put('/api/auth/korisnik/profil', authMiddleWare, async (req, res) => {
     }
 });
 
-// Authorized [CREATE] - rezervacija
+// RUTA - User [CREATE] rezervacija
 app.post('/api/auth/rezervacije', authMiddleWare, async (req, res) => {
     const { resurs_id, vrijeme_pocetka, vrijeme_zavrsetka } = req.body;
     const korisnik_id = req.user.id;
@@ -198,7 +167,7 @@ app.post('/api/auth/rezervacije', authMiddleWare, async (req, res) => {
         return res.status(400).json({ greska: 'Sva polja (resurs_id, vrijeme_pocetka, vrijeme_zavrsetka) su obavezna.' });
     }
 
-    // --- TEMPORALNE VALIDACIJE ---
+    // Validacija - Završetak > Početak i Početak >= Sada
     const start = new Date(vrijeme_pocetka);
     const end = new Date(vrijeme_zavrsetka);
     const now = new Date();
@@ -210,7 +179,7 @@ app.post('/api/auth/rezervacije', authMiddleWare, async (req, res) => {
         return res.status(400).json({ greska: 'Nije moguće kreirati rezervaciju u prošlosti.' });
     }
 
-    // NOVA PROVJERA: Trajanje ne smije biti dulje od 8 sati
+    // Validacija - Trajanje <= 8 sati
     const OSAM_SATI_MS = 8 * 60 * 60 * 1000;
     if (end.getTime() - start.getTime() > OSAM_SATI_MS) {
         return res.status(400).json({ greska: 'Rezervacija ne smije trajati dulje od 8 sati.' });
@@ -224,7 +193,7 @@ app.post('/api/auth/rezervacije', authMiddleWare, async (req, res) => {
         }
         const tip_resursa = resursInfo[0].tip;
 
-        // --- 1. VALIDACIJA: Zabrane pristupa ---
+        // Validacija - Zabrana pristupa
         const [zabrane] = await db.query(
             'SELECT id, razlog FROM Zabrane_Pristupa WHERE korisnik_id = ? AND aktivna = true AND (resurs_id = ? OR tip_resursa = ?)',
             [korisnik_id, resurs_id, tip_resursa]
@@ -236,7 +205,7 @@ app.post('/api/auth/rezervacije', authMiddleWare, async (req, res) => {
             });
         }
 
-        // --- 2. VALIDACIJA: Zabrana rezervacije istog resursa unutar 24h za istog korisnika ---
+        // Validacija - Ponovljeno rezerviranje unutar 24h
         const DVADESETCETIRI_SATA_MS = 24 * 60 * 60 * 1000;
         const startMinus24h = new Date(start.getTime() - DVADESETCETIRI_SATA_MS);
         const endPlus24h = new Date(end.getTime() + DVADESETCETIRI_SATA_MS);
@@ -257,7 +226,7 @@ app.post('/api/auth/rezervacije', authMiddleWare, async (req, res) => {
             });
         }
 
-        // --- 3. VALIDACIJA: Globalni double-booking ---
+        // Validacija - Double-booking
         const sqlProvjeraPreklapanja = `
             SELECT id FROM Rezervacije 
             WHERE resurs_id = ? 
@@ -273,7 +242,7 @@ app.post('/api/auth/rezervacije', authMiddleWare, async (req, res) => {
             });
         }
 
-        // --- 4. IZVRŠAVANJE ---
+        // Izvršavanje - Sve validacije uspješne, CREATE rezervacije
         const [result] = await db.query(
             'INSERT INTO Rezervacije (korisnik_id, resurs_id, vrijeme_pocetka, vrijeme_zavrsetka, status) VALUES (?, ?, ?, ?, ?)',
             [korisnik_id, resurs_id, vrijeme_pocetka, vrijeme_zavrsetka, 'aktivna']
@@ -289,12 +258,11 @@ app.post('/api/auth/rezervacije', authMiddleWare, async (req, res) => {
     }
 });
 
-// Authorized [READ] - dohvat svih vlastitih rezervacija korisnika
+// RUTA - User [READ] rezervacije
 app.get('/api/auth/korisnik/moje-rezervacije', authMiddleWare, async (req, res) => {
-    const korisnik_id = req.user.id; // Izravno i sigurno preuzimanje ID-a iz tokena
+    const korisnik_id = req.user.id;
 
     try {
-        // Koristimo JOIN kako bismo uzeli sve iz rezervacija i samo naziv iz resursa
         const upit = `
             SELECT Rezervacije.*, Resursi.naziv AS naziv_resursa 
             FROM Rezervacije 
@@ -314,7 +282,7 @@ app.get('/api/auth/korisnik/moje-rezervacije', authMiddleWare, async (req, res) 
     }
 });
 
-// Authorized [UPDATE] - rezervacija (promjena termina ili otkazivanje)
+// RUTA - User [UPDATE] - rezervacija
 app.put('/api/auth/rezervacije/:id', authMiddleWare, async (req, res) => {
     const { id } = req.params;
     const { vrijeme_pocetka, vrijeme_zavrsetka, status } = req.body;
@@ -324,7 +292,7 @@ app.put('/api/auth/rezervacije/:id', authMiddleWare, async (req, res) => {
         return res.status(400).json({ greska: 'Sva polja (vrijeme_pocetka, vrijeme_zavrsetka, status) su obavezna.' });
     }
 
-    // --- TEMPORALNE VALIDACIJE ---
+    // Validacija - Završetak > Početak i Početak >= Sada
     const start = new Date(vrijeme_pocetka);
     const end = new Date(vrijeme_zavrsetka);
     const now = new Date();
@@ -336,7 +304,7 @@ app.put('/api/auth/rezervacije/:id', authMiddleWare, async (req, res) => {
         return res.status(400).json({ greska: 'Ne možete premjestiti rezervaciju u termin koji je već prošao.' });
     }
 
-    // NOVA PROVJERA: Trajanje ne smije biti dulje od 8 sati
+    // Validacija - Trajanje <= 8 sati
     const OSAM_SATI_MS = 8 * 60 * 60 * 1000;
     if (end.getTime() - start.getTime() > OSAM_SATI_MS) {
         return res.status(400).json({ greska: 'Rezervacija ne smije trajati dulje od 8 sati.' });
@@ -360,7 +328,7 @@ app.put('/api/auth/rezervacije/:id', authMiddleWare, async (req, res) => {
         }
         const tip_resursa = resursInfo[0].tip;
 
-        // --- 1. VALIDACIJA: Zabrane pristupa ---
+        // Validacija - Zabrana pristupa
         const [zabrane] = await db.query(
             'SELECT id, razlog FROM Zabrane_Pristupa WHERE korisnik_id = ? AND aktivna = true AND (resurs_id = ? OR tip_resursa = ?)',
             [korisnik_id, resurs_id, tip_resursa]
@@ -373,7 +341,7 @@ app.put('/api/auth/rezervacije/:id', authMiddleWare, async (req, res) => {
         }
 
         if (status === 'aktivna') {
-            // --- 2. VALIDACIJA: Zabrana rezervacije istog resursa unutar 24h (isključujući samu sebe) ---
+            // Validacija - Ponovljeno rezerviranje unutar 24h, ignorira samu sebe
             const DVADESETCETIRI_SATA_MS = 24 * 60 * 60 * 1000;
             const startMinus24h = new Date(start.getTime() - DVADESETCETIRI_SATA_MS);
             const endPlus24h = new Date(end.getTime() + DVADESETCETIRI_SATA_MS);
@@ -395,7 +363,7 @@ app.put('/api/auth/rezervacije/:id', authMiddleWare, async (req, res) => {
                 });
             }
 
-            // --- 3. VALIDACIJA: Globalni double-booking ---
+            // Validacija - Double-booking
             const sqlProvjeraPreklapanja = `
                 SELECT id FROM Rezervacije 
                 WHERE resurs_id = ? 
@@ -413,7 +381,7 @@ app.put('/api/auth/rezervacije/:id', authMiddleWare, async (req, res) => {
             }
         }
 
-        // --- 4. IZVRŠAVANJE ---
+        // Izvršavanje - Sve validacije uspješne, UPDATE rezervacije
         await db.query(
             'UPDATE Rezervacije SET vrijeme_pocetka = ?, vrijeme_zavrsetka = ?, status = ? WHERE id = ? AND korisnik_id = ?',
             [vrijeme_pocetka, vrijeme_zavrsetka, status, id, korisnik_id]
@@ -426,13 +394,11 @@ app.put('/api/auth/rezervacije/:id', authMiddleWare, async (req, res) => {
     }
 });
 
-// Authorized [READ] - zabrane
+// RUTA - User [READ] - zabrane
 app.get('/api/auth/korisnik/moje-zabrane', authMiddleWare, async (req, res) => {
-    const korisnik_id = req.user.id; // Izravno i sigurno preuzimanje ID-a iz tokena
+    const korisnik_id = req.user.id;
 
     try {
-        // Koristimo LEFT JOIN jer resurs_id u Zabrane_Pristupa može biti NULL 
-        // (ako je zabrana na cijeli tip_resursa umjesto na specifičan resurs)
         const upit = `
             SELECT Zabrane_Pristupa.*, Resursi.naziv AS naziv_resursa 
             FROM Zabrane_Pristupa 
@@ -452,14 +418,11 @@ app.get('/api/auth/korisnik/moje-zabrane', authMiddleWare, async (req, res) => {
     }
 });
 
-//tu ce doci authorized read available resource
-// Authorized [READ] - resursi bez zabrane
+// RUTA - User [READ] - resursi bez zabrane
 app.get('/api/auth/resursi-dostupni', authMiddleWare, async (req, res) => {
-    const korisnik_id = req.user.id; // Izvlačimo ID iz tokena
+    const korisnik_id = req.user.id;
 
     try {
-        // SQL upit dohvaća sve resurse (r) za koje NE POSTOJI (NOT EXISTS)
-        // aktivna zabrana (z) za ovog korisnika koja se odnosi na r.id ILI r.tip
 
         const sqlDostupniResursi = `
             SELECT r.* FROM Resursi r
@@ -483,13 +446,11 @@ app.get('/api/auth/resursi-dostupni', authMiddleWare, async (req, res) => {
     }
 });
 
-
-// Authorized [READ] - resurs-zauzetost
+// RUTA - User [READ] - zauzetost resursa
 app.get('/api/auth/resursi/:id/zauzetost', authMiddleWare, async (req, res) => {
-    const { id } = req.params; // ID resursa za koji tražimo zauzetost
+    const { id } = req.params;
 
     try {
-        // Dohvaćamo samo 'aktivne' rezervacije koje završavaju u budućnosti ili sadašnjosti
         const [zauzetiTermini] = await db.query(
             `SELECT vrijeme_pocetka, vrijeme_zavrsetka 
              FROM Rezervacije 
@@ -506,14 +467,15 @@ app.get('/api/auth/resursi/:id/zauzetost', authMiddleWare, async (req, res) => {
     }
 });
 
-// [READ] - korisnici
+// RUTA - Admin [READ] - korisnici
 app.get('/api/korisnici', adminMiddleware, async (req, res) => {
     try {       
     const [rows] = await db.query('SELECT * FROM Korisnici');        
     res.status(200).json(rows);
 } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri dohvaćanju korisnika' }); }
 });
-// [CREATE] - korisnik
+
+// RUTA - Admin [CREATE] - korisnik
 app.post('/api/korisnici', adminMiddleware, async (req, res) => {
     const { ime, prezime, email, lozinka } = req.body;
 
@@ -534,7 +496,7 @@ app.post('/api/korisnici', adminMiddleware, async (req, res) => {
     }
 });
 
-// [UPDATE] - korisnik
+// RUTA - Admin [UPDATE] - korisnik
 app.put('/api/korisnici/:id', adminMiddleware, async (req, res) => {
     const { id } = req.params;
     const { ime, prezime, email, lozinka } = req.body;
@@ -559,7 +521,8 @@ app.put('/api/korisnici/:id', adminMiddleware, async (req, res) => {
         res.status(500).json({ greska: 'Greška pri ažuriranju korisnika' });
     }
 });
-// [DELETE] - korisnik
+
+// RUTA - Admin [DELETE] - korisnik
 app.delete('/api/korisnici/:id', adminMiddleware, async (req, res) => {
     const { id } = req.params;
     try {      
@@ -568,14 +531,15 @@ app.delete('/api/korisnici/:id', adminMiddleware, async (req, res) => {
 } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri brisanju korisnika. Provjerite vanjske ključeve.' }); }
 });
 
-// [READ] - administratori
+// RUTA - Admin [READ] - administratori
 app.get('/api/administratori', adminMiddleware, async (req, res) => {
     try {
     const [rows] = await db.query('SELECT * FROM Administratori');
     res.status(200).json(rows);
 } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri dohvaćanju administratora' }); }
 });
-// [CREATE] - administrator
+
+// RUTA - Admin [CREATE] - administrator
 app.post('/api/administratori', adminMiddleware, async (req, res) => {
     const { ime, prezime, email, lozinka } = req.body;
 
@@ -596,7 +560,7 @@ app.post('/api/administratori', adminMiddleware, async (req, res) => {
     }
 });
 
-// [UPDATE] - administrator
+// RUTA - Admin [UPDATE] - administrator
 app.put('/api/administratori/:id', adminMiddleware, async (req, res) => {
     const { id } = req.params;
     const { ime, prezime, email, lozinka } = req.body;
@@ -604,7 +568,7 @@ app.put('/api/administratori/:id', adminMiddleware, async (req, res) => {
     if (email && !isValidEmail(email)) {
         return res.status(400).json({ greska: 'Neispravan format email adrese.' });
     }
-    // Provjeravamo lozinku SAMO ako je poslana
+
     if (lozinka && !isValidPassword(lozinka)) {
         return res.status(400).json({ greska: 'Nova lozinka mora imati barem 8 znakova, uključujući barem jedno veliko slovo, jedno malo slovo i jedan broj.' });
     }
@@ -622,7 +586,8 @@ app.put('/api/administratori/:id', adminMiddleware, async (req, res) => {
         res.status(500).json({ greska: 'Greška pri ažuriranju administratora' });
     }
 });
-// [DELETE] - administrator
+
+// RUTA - Admin [DELETE] - administrator
 app.delete('/api/administratori/:id', adminMiddleware, async (req, res) => {
     const { id } = req.params;
     try {
@@ -631,14 +596,15 @@ app.delete('/api/administratori/:id', adminMiddleware, async (req, res) => {
     } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri brisanju administratora' }); }
 });
 
-// [READ] - resursi
+// RUTA - Admin [READ] - resursi
 app.get('/api/resursi', adminMiddleware, async (req, res) => {
     try {
     const [rows] = await db.query('SELECT * FROM Resursi');
     res.status(200).json(rows);
 } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri dohvaćanju resursa' }); }
 });
-// [CREATE] - resurs
+
+// RUTA - Admin [CREATE] - resurs
 app.post('/api/resursi', adminMiddleware, async (req, res) => {
     const { naziv, tip, opis, kapacitet, status } = req.body;
     try {
@@ -646,7 +612,8 @@ app.post('/api/resursi', adminMiddleware, async (req, res) => {
         res.status(201).json({ poruka: 'Resurs uspješno kreiran', id: result.insertId });
     } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri kreiranju resursa' }); }
 });
-// [UPDATE] - resurs
+
+// RUTA - Admin [UPDATE] - resurs
 app.put('/api/resursi/:id', adminMiddleware, async (req, res) => {
     const { id } = req.params;
     const { naziv, tip, opis, kapacitet, status } = req.body;
@@ -655,7 +622,8 @@ app.put('/api/resursi/:id', adminMiddleware, async (req, res) => {
         res.status(200).json({ poruka: 'Resurs uspješno ažuriran' });
     } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri ažuriranju resursa' }); }
 });
-// [DELETE] - resurs
+
+// RUTA - Admin [DELETE] - resurs
 app.delete('/api/resursi/:id', adminMiddleware, async (req, res) => {
     const { id } = req.params;
     try {
@@ -664,7 +632,7 @@ app.delete('/api/resursi/:id', adminMiddleware, async (req, res) => {
     } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri brisanju resursa. Provjerite postoje li povezane rezervacije.' }); }
 });
 
-// [READ] - zabrane
+// RUTA - Admin [READ] - zabrane
 app.get('/api/zabrane', adminMiddleware, async (req, res) => {
     try {
     const [rows] = await db.query('SELECT * FROM Zabrane_Pristupa');
@@ -672,15 +640,13 @@ app.get('/api/zabrane', adminMiddleware, async (req, res) => {
 } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri dohvaćanju zabrana' }); }
 });
 
-// [CREATE] - zabrana
+// RUTA - Admin [CREATE] - zabrana
 app.post('/api/zabrane', adminMiddleware, async (req, res) => {
-    // 1. Vadimo ID admina iz middlewarea (ovisno kako si nazvao ključ u payloadu pri kreiranju tokena)
-    const administrator_id = req.user.id || req.user.admin_id;
+    const administrator_id = req.user.id;
 
-    // 2. administrator_id je uklonjen iz destrukturiranja req.body
     const { korisnik_id, resurs_id, tip_resursa, razlog, aktivna } = req.body;
 
-    // VALIDACIJA: Provjera isključivosti (XOR logika)
+    // Validacija - XOR za resurs_id i tip_resursa
     const imaResurs = resurs_id ? true : false;
     const imaTip = tip_resursa ? true : false;
 
@@ -709,13 +675,11 @@ app.post('/api/zabrane', adminMiddleware, async (req, res) => {
 app.put('/api/zabrane/:id', adminMiddleware, async (req, res) => {
     const { id } = req.params;
 
-    // I ovdje vadimo ID admina direktno iz middlewarea
-    const administrator_id = req.user.id || req.user.admin_id;
+    const administrator_id = req.user.id;
 
-    // administrator_id je uklonjen iz destrukturiranja req.body
     const { korisnik_id, resurs_id, tip_resursa, razlog, aktivna } = req.body;
 
-    // VALIDACIJA
+    // Validacija - XOR za resurs_id i tip_resursa
     const imaResurs = resurs_id ? true : false;
     const imaTip = tip_resursa ? true : false;
 
@@ -740,7 +704,7 @@ app.put('/api/zabrane/:id', adminMiddleware, async (req, res) => {
     }
 });
 
-// [DELETE] - zabrana
+// RUTA - Admin [DELETE] - zabrana
 app.delete('/api/zabrane/:id', adminMiddleware, async (req, res) => {
     const { id } = req.params;
     try {
@@ -749,23 +713,23 @@ app.delete('/api/zabrane/:id', adminMiddleware, async (req, res) => {
     } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri brisanju zabrane' }); }
 });
 
-// [READ] - rezervacije
+// RUTA - Admin [READ] - rezervacije
 app.get('/api/rezervacije', adminMiddleware, async (req, res) => {
     try {
         const [rows] = await db.query('SELECT * FROM Rezervacije');
         res.status(200).json(rows);
     } catch (error) { console.error(error); res.status(500).json({ greska: 'Greška pri dohvaćanju rezervacija' }); }
 });
-// [CREATE] - rezervacija (Admin)
+
+// RUTA - Admin [CREATE] - rezervacija
 app.post('/api/rezervacije', adminMiddleware, async (req, res) => {
     const { korisnik_id, resurs_id, vrijeme_pocetka, vrijeme_zavrsetka, status, napomena_admina } = req.body;
 
-    // Osnovna provjera polja
     if (!korisnik_id || !resurs_id || !vrijeme_pocetka || !vrijeme_zavrsetka) {
         return res.status(400).json({ greska: 'Sva osnovna polja (korisnik_id, resurs_id, vrijeme_pocetka, vrijeme_zavrsetka) su obavezna.' });
     }
 
-    // --- TEMPORALNE VALIDACIJE ---
+    // Validacija - Završetak > Početak i Početak >= Sada
     const start = new Date(vrijeme_pocetka);
     const end = new Date(vrijeme_zavrsetka);
     const now = new Date();
@@ -786,7 +750,7 @@ app.post('/api/rezervacije', adminMiddleware, async (req, res) => {
 
         const tip_resursa = resursInfo[0].tip;
 
-        // --- 1. VALIDACIJA ZABRANE: Za ciljanog korisnika ---
+        // Validacija - Zabrana pristupa
         const [zabrane] = await db.query(
             'SELECT id, razlog FROM Zabrane_Pristupa WHERE korisnik_id = ? AND aktivna = true AND (resurs_id = ? OR tip_resursa = ?)',
             [korisnik_id, resurs_id, tip_resursa]
@@ -799,7 +763,7 @@ app.post('/api/rezervacije', adminMiddleware, async (req, res) => {
             });
         }
 
-        // --- 2. VALIDACIJA PREKLAPANJA (Double-booking) ---
+        // Validacija - Double-booking
         const sqlProvjeraPreklapanja = `
             SELECT id FROM Rezervacije 
             WHERE resurs_id = ? 
@@ -813,7 +777,7 @@ app.post('/api/rezervacije', adminMiddleware, async (req, res) => {
             return res.status(409).json({ greska: 'Termin je zauzet. Odabrani resurs je već rezerviran u navedenom vremenu.' });
         }
 
-        // --- 3. IZVRŠAVANJE UPISA ---
+        // Izvršavanje - Sve validacije uspješne, CREATE rezervacije
         const [result] = await db.query(
             'INSERT INTO Rezervacije (korisnik_id, resurs_id, vrijeme_pocetka, vrijeme_zavrsetka, status, napomena_admina) VALUES (?, ?, ?, ?, ?, ?)',
             [korisnik_id, resurs_id, vrijeme_pocetka, vrijeme_zavrsetka, status || 'aktivna', napomena_admina || null]
@@ -826,7 +790,8 @@ app.post('/api/rezervacije', adminMiddleware, async (req, res) => {
         res.status(500).json({ greska: 'Greška pri kreiranju rezervacije' });
     }
 });
-// [UPDATE] - rezervacija (Admin)
+
+// RUTA - Admin [UPDATE] - rezervacija
 app.put('/api/rezervacije/:id', adminMiddleware, async (req, res) => {
     const { id } = req.params;
     const { korisnik_id, resurs_id, vrijeme_pocetka, vrijeme_zavrsetka, status, napomena_admina } = req.body;
@@ -835,7 +800,7 @@ app.put('/api/rezervacije/:id', adminMiddleware, async (req, res) => {
         return res.status(400).json({ greska: 'Nedostaju obavezni podaci za ažuriranje.' });
     }
 
-    // --- TEMPORALNE VALIDACIJE ---
+    // Validacija - Završetak > Početak i Početak >= Sada
     const start = new Date(vrijeme_pocetka);
     const end = new Date(vrijeme_zavrsetka);
     const now = new Date();
@@ -844,7 +809,6 @@ app.put('/api/rezervacije/:id', adminMiddleware, async (req, res) => {
         return res.status(400).json({ greska: 'Vrijeme završetka mora biti nakon vremena početka.' });
     }
 
-    // Provjera prošlosti kod ažuriranja
     if (start < now) {
         return res.status(400).json({ greska: 'Ne možete premjestiti rezervaciju u termin koji je već prošao.' });
     }
@@ -858,7 +822,7 @@ app.put('/api/rezervacije/:id', adminMiddleware, async (req, res) => {
 
         const tip_resursa = resursInfo[0].tip;
 
-        // --- 1. VALIDACIJA ZABRANE: Za ciljanog korisnika ---
+        // Validacija - Zabrana pristupa
         const [zabrane] = await db.query(
             'SELECT id, razlog FROM Zabrane_Pristupa WHERE korisnik_id = ? AND aktivna = true AND (resurs_id = ? OR tip_resursa = ?)',
             [korisnik_id, resurs_id, tip_resursa]
@@ -871,8 +835,7 @@ app.put('/api/rezervacije/:id', adminMiddleware, async (req, res) => {
             });
         }
 
-        // --- 2. VALIDACIJA PREKLAPANJA (Double-booking) ---
-        // Provjeravamo preklapanje samo ako je status rezervacije "aktivna"
+        // Validacija - Double-booking
         if (status === 'aktivna') {
             const sqlProvjeraPreklapanja = `
                 SELECT id FROM Rezervacije 
@@ -889,7 +852,7 @@ app.put('/api/rezervacije/:id', adminMiddleware, async (req, res) => {
             }
         }
 
-        // --- 3. IZVRŠAVANJE AŽURIRANJA ---
+        // Izvršavanje - Sve validacije uspješne, UPDATE rezervacije
         await db.query(
             'UPDATE Rezervacije SET korisnik_id = ?, resurs_id = ?, vrijeme_pocetka = ?, vrijeme_zavrsetka = ?, status = ?, napomena_admina = ? WHERE id = ?',
             [korisnik_id, resurs_id, vrijeme_pocetka, vrijeme_zavrsetka, status, napomena_admina, id]
@@ -902,7 +865,8 @@ app.put('/api/rezervacije/:id', adminMiddleware, async (req, res) => {
         res.status(500).json({ greska: 'Greška pri izmjeni rezervacije' });
     }
 });
-// [DELETE] - rezervacija
+
+// RUTA - Admin [DELETE] - rezervacija
 app.delete('/api/rezervacije/:id', adminMiddleware, async (req, res) => {
     const { id } = req.params;
     try {
